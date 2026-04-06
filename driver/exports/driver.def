@@ -1,0 +1,7 @@
+LIBRARY         OmecTeleportASIO
+EXPORTS
+                DllMain = DllEntryPoint
+                DllGetClassObject    PRIVATE
+                DllCanUnloadNow      PRIVATE
+                DllRegisterServer    PRIVATE
+                DllUnregisterServer  PRIVATE

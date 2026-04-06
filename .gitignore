@@ -1,0 +1,32 @@
+# Build outputs
+x64/
+Debug/
+Release/
+*.obj
+*.lib
+*.exp
+*.dll
+*.pdb
+*.ilk
+*.log
+*.tlog/
+*.res
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+ipch/
+
+# ASIO SDK (must be obtained separately from Steinberg)
+ASIOSDK/
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store

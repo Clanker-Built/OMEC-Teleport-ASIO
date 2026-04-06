@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>OmecTeleportASIO</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- ======== Debug x64 ======== -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)x64\Debug\</OutDir>
+    <IntDir>$(SolutionDir)x64\Debug\$(ProjectName)\</IntDir>
+    <TargetName>OmecTeleportASIO</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+
+  <!-- ======== Release x64 ======== -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)x64\Release\</OutDir>
+    <IntDir>$(SolutionDir)x64\Release\$(ProjectName)\</IntDir>
+    <TargetName>OmecTeleportASIO</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+
+  <!-- ======== Shared ItemDefinitions ======== -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>
+        $(ProjectDir)src;
+        $(SolutionDir)ASIOSDK\common;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>
+        WIN32;_WINDOWS;_USRDLL;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <Link>
+      <ModuleDefinitionFile>$(ProjectDir)exports\driver.def</ModuleDefinitionFile>
+      <AdditionalDependencies>
+        ole32.lib;oleaut32.lib;avrt.lib;propsys.lib;
+        advapi32.lib;user32.lib;gdi32.lib;comctl32.lib;
+        uxtheme.lib;uuid.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+
+  <!-- ======== Debug-specific ======== -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- ======== Release-specific ======== -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- ======== Source files ======== -->
+  <ItemGroup>
+    <!-- Our driver sources -->
+    <ClCompile Include="src\dllmain.cpp" />
+    <ClCompile Include="src\OmecTeleportASIO.cpp" />
+    <ClCompile Include="src\WasapiEngine.cpp" />
+    <ClCompile Include="src\GainProcessor.cpp" />
+    <ClCompile Include="src\RegistrySettings.cpp" />
+    <ClCompile Include="src\ControlPanel.cpp" />
+
+    <!-- Steinberg ASIO SDK sources -->
+    <ClCompile Include="$(SolutionDir)ASIOSDK\common\combase.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)ASIOSDK\common\dllentry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <DisableSpecificWarnings>4996</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)ASIOSDK\common\register.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- debugmessage.cpp: Mac-only, not needed for Windows driver -->
+    <!-- asio.cpp: ASIO client API, not needed for an ASIO driver DLL -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Headers -->
+    <ClInclude Include="src\Guids.h" />
+    <ClInclude Include="src\OmecTeleportASIO.h" />
+    <ClInclude Include="src\UsbEngine.h" />
+    <ClInclude Include="src\RingBuffer.h" />
+    <ClInclude Include="src\GainProcessor.h" />
+    <ClInclude Include="src\TruePeakDetector.h" />
+    <ClInclude Include="src\PiRateController.h" />
+    <ClInclude Include="src\DeviceEnumerator.h" />
+    <ClInclude Include="src\RegistrySettings.h" />
+    <ClInclude Include="src\ControlPanel.h" />
+    <ClInclude Include="src\resource.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Resource file -->
+    <ResourceCompile Include="src\resource.rc" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Module definition -->
+    <None Include="exports\driver.def" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
