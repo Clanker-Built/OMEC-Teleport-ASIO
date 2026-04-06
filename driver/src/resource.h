@@ -57,6 +57,9 @@
 #define IDC_CALIB_CANCEL_BTN  244
 #define IDC_CALIB_INSTRUCTION 245
 
+// Bitmaps
+#define IDB_ASIO_LOGO         280
+
 // Version info string table
 #define IDS_DRIVER_NAME       301
 #define IDS_DRIVER_VERSION    302

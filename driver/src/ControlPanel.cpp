@@ -179,19 +179,36 @@ void ControlPanel::paintMeter(HWND hCtrl, float level)
 
 void ControlPanel::createTabs(HWND hTab)
 {
-    static const wchar_t* tabNames[] = { L"Device Status", L"Input Controls",
-                                          L"Output Controls", L"Advanced" };
-    static const int tabDialogs[]    = { IDD_TAB_STATUS, IDD_TAB_INPUT,
-                                          IDD_TAB_OUTPUT, IDD_TAB_ADVANCED };
-    static DLGPROC tabProcs[]        = { TabStatusProc, TabInputProc,
-                                          TabOutputProc, TabAdvancedProc };
+    // ANSI strings — project uses MultiByte charset, so TabCtrl_InsertItem
+    // resolves to the ANSI version. Wide strings would show only 1 char.
+    static const char* tabNames[] = { "Device Status", "Input Controls",
+                                       "Output Controls", "Advanced" };
+    static const int tabDialogs[] = { IDD_TAB_STATUS, IDD_TAB_INPUT,
+                                       IDD_TAB_OUTPUT, IDD_TAB_ADVANCED };
+    static DLGPROC tabProcs[]     = { TabStatusProc, TabInputProc,
+                                       TabOutputProc, TabAdvancedProc };
 
-    TCITEMW tie = {};
+    // Inherit the dialog font so tab labels render at the correct size.
+    HFONT hFont = reinterpret_cast<HFONT>(
+        SendMessageW(GetParent(hTab), WM_GETFONT, 0, 0));
+    if (hFont)
+        SendMessageW(hTab, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), TRUE);
+
+    // Strip visual styles — dark-mode themes collapse tab label widths.
+    SetWindowTheme(hTab, L"", L"");
+
+    // Compute fixed tab width from the tab control's actual pixel width.
+    RECT rcTab;
+    GetClientRect(hTab, &rcTab);
+    int tabWidth = (rcTab.right - rcTab.left) / 4 - 3;
+    SendMessageA(hTab, TCM_SETITEMSIZE, 0, MAKELPARAM(tabWidth, 22));
+
+    TCITEMA tie = {};
     tie.mask    = TCIF_TEXT;
     for (int i = 0; i < 4; ++i)
     {
-        tie.pszText = const_cast<wchar_t*>(tabNames[i]);
-        TabCtrl_InsertItem(hTab, i, &tie);
+        tie.pszText = const_cast<char*>(tabNames[i]);
+        SendMessageA(hTab, TCM_INSERTITEMA, i, reinterpret_cast<LPARAM>(&tie));
     }
 
     // Create all child dialogs, initially hidden
@@ -825,6 +842,13 @@ INT_PTR CALLBACK ControlPanel::TabStatusProc(HWND hDlg, UINT msg, WPARAM wParam,
     {
         ControlPanel* pThis = reinterpret_cast<ControlPanel*>(lParam);
         SetWindowLongPtrW(hDlg, DWLP_USER, reinterpret_cast<LONG_PTR>(pThis));
+
+        // Load and display the ASIO Compatible logo
+        HBITMAP hLogo = LoadBitmapW(s_hInstance, MAKEINTRESOURCEW(IDB_ASIO_LOGO));
+        if (hLogo)
+            SendDlgItemMessageW(hDlg, IDC_STATUS_ICON, STM_SETIMAGE,
+                                IMAGE_BITMAP, reinterpret_cast<LPARAM>(hLogo));
+
         applyDarkTheme(hDlg);
         return TRUE;
     }

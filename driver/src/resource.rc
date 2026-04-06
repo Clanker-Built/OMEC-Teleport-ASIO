@@ -5,134 +5,153 @@
 #include <windows.h>
 #include "resource.h"
 
+// ASIO Compatible logo bitmap
+IDB_ASIO_LOGO  BITMAP  "asio_logo.bmp"
+
 // ============================================================================
 // Main Control Panel dialog
-// Has a tab control filling most of the space.
 // ============================================================================
-IDD_MAIN_DIALOG DIALOGEX 0, 0, 380, 260
-STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+IDD_MAIN_DIALOG DIALOGEX 0, 0, 420, 300
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "OMEC Teleport ASIO Control Panel"
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
-    CONTROL "", IDC_TAB, "SysTabControl32", TCS_TABS | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            4, 4, 372, 240
+    CONTROL "", IDC_TAB, "SysTabControl32",
+            TCS_TABS | TCS_FIXEDWIDTH | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            4, 4, 412, 280
 END
 
 // ============================================================================
-// Device Status tab (child dialog)
+// Device Status tab
 // ============================================================================
-IDD_TAB_STATUS DIALOGEX 0, 0, 364, 210
+IDD_TAB_STATUS DIALOGEX 0, 0, 404, 248
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Device:",              -1,              8, 10,  60, 10
-    LTEXT           "Not connected",        IDC_STATUS_DEVICE, 70, 10, 200, 10
-    LTEXT           "Sample Rate:",         -1,              8, 26,  60, 10
-    LTEXT           "44100 Hz",             IDC_STATUS_SAMPLERATE, 70, 26, 120, 10
-    LTEXT           "Buffer Size:",         -1,              8, 42,  60, 10
-    LTEXT           "128 samples",          IDC_STATUS_BUFFERSIZE, 70, 42, 120, 10
-    LTEXT           "Input Latency:",       -1,              8, 58,  60, 10
-    LTEXT           "— ms",                 IDC_STATUS_LATENCY_IN, 70, 58, 120, 10
-    LTEXT           "Output Latency:",      -1,              8, 74,  60, 10
-    LTEXT           "— ms",                 IDC_STATUS_LATENCY_OUT, 70, 74, 120, 10
+    GROUPBOX        "Device Status", -1, 4, 2, 300, 100
 
-    GROUPBOX        "About", -1, 4, 100, 356, 50
+    LTEXT           "Device:",         -1,               12, 16, 60, 10
+    LTEXT           "Not connected",   IDC_STATUS_DEVICE, 80, 16, 210, 10
+
+    LTEXT           "Sample Rate:",    -1,               12, 30, 60, 10
+    LTEXT           "---",             IDC_STATUS_SAMPLERATE, 80, 30, 120, 10
+
+    LTEXT           "Buffer Size:",    -1,               12, 44, 60, 10
+    LTEXT           "---",             IDC_STATUS_BUFFERSIZE, 80, 44, 120, 10
+
+    LTEXT           "Input Latency:",  -1,               12, 58, 65, 10
+    LTEXT           "---",             IDC_STATUS_LATENCY_IN, 80, 58, 120, 10
+
+    LTEXT           "Output Latency:", -1,               12, 72, 65, 10
+    LTEXT           "---",             IDC_STATUS_LATENCY_OUT, 80, 72, 120, 10
+
+    // ASIO Compatible logo
+    CONTROL         "", IDC_STATUS_ICON, "STATIC",
+                    SS_BITMAP | WS_CHILD | WS_VISIBLE, 316, 10, 80, 75
+
+    GROUPBOX        "About", -1, 4, 106, 396, 56
     LTEXT           "Orange OMEC Teleport ASIO Driver v1.0",
-                    -1, 12, 114, 340, 10
-    LTEXT           "Low-latency custom driver with Auto Input Level Set",
-                    -1, 12, 128, 340, 10
+                    -1, 12, 120, 380, 10
+    LTEXT           "Low-latency custom driver with digital input gain control",
+                    -1, 12, 132, 380, 10
+    LTEXT           "ASIO is a trademark of Steinberg Media Technologies GmbH",
+                    -1, 12, 144, 380, 10
 END
 
 // ============================================================================
 // Input Controls tab
 // ============================================================================
-IDD_TAB_INPUT DIALOGEX 0, 0, 364, 210
+IDD_TAB_INPUT DIALOGEX 0, 0, 404, 248
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Input Gain", -1, 4, 4, 356, 90
+    GROUPBOX        "Input Gain", -1, 4, 2, 396, 100
 
-    LTEXT           "L",   -1,  12, 20,  10, 10
+    LTEXT           "Left",  -1,  12, 18,  20, 10
     CONTROL         "", IDC_INPUT_METER_L, "STATIC",
-                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 24, 18, 220, 12
+                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 36, 16, 240, 12
     CONTROL         "", IDC_INPUT_GAIN_L, "msctls_trackbar32",
                     TBS_HORZ | TBS_NOTICKS | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                    24, 34, 220, 18
-    RTEXT           "0.0 dB", IDC_INPUT_GAIN_L_VAL, 250, 34, 50, 10
+                    36, 32, 240, 18
+    RTEXT           "0.0 dB", IDC_INPUT_GAIN_L_VAL, 282, 34, 50, 10
 
-    LTEXT           "R",   -1,  12, 56,  10, 10
+    LTEXT           "Right", -1,  12, 56,  24, 10
     CONTROL         "", IDC_INPUT_METER_R, "STATIC",
-                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 24, 54, 220, 12
+                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 36, 54, 240, 12
     CONTROL         "", IDC_INPUT_GAIN_R, "msctls_trackbar32",
                     TBS_HORZ | TBS_NOTICKS | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                    24, 70, 220, 18
-    RTEXT           "0.0 dB", IDC_INPUT_GAIN_R_VAL, 250, 70, 50, 10
+                    36, 70, 240, 18
+    RTEXT           "0.0 dB", IDC_INPUT_GAIN_R_VAL, 282, 72, 50, 10
 
-    AUTOCHECKBOX    "Link L/R", IDC_INPUT_LINK, 308, 50, 48, 12
+    AUTOCHECKBOX    "Link L/R", IDC_INPUT_LINK, 340, 50, 52, 14
 
-    GROUPBOX        "Auto Input Level Set", -1, 4, 100, 356, 98
+    GROUPBOX        "Auto Input Level Set", -1, 4, 108, 396, 100
     LTEXT           "Play your loudest note/chord, then click Auto Set.",
-                    -1, 12, 114, 340, 10
-    PUSHBUTTON      "Auto Set Input Level", IDC_AUTOSET_BTN, 12, 130, 120, 16
+                    -1, 12, 122, 380, 10
+    PUSHBUTTON      "Auto Set Input Level", IDC_AUTOSET_BTN, 12, 140, 120, 18
     CONTROL         "", IDC_AUTOSET_PROGRESS, "msctls_progress32",
-                    WS_CHILD | WS_VISIBLE, 140, 132, 210, 12
-    LTEXT           "Ready", IDC_AUTOSET_STATUS, 12, 152, 340, 20, SS_WORDELLIPSIS
+                    WS_CHILD | WS_VISIBLE, 140, 142, 248, 14
+    LTEXT           "Ready", IDC_AUTOSET_STATUS, 12, 166, 380, 28, SS_WORDELLIPSIS
 END
 
 // ============================================================================
 // Output Controls tab
 // ============================================================================
-IDD_TAB_OUTPUT DIALOGEX 0, 0, 364, 210
+IDD_TAB_OUTPUT DIALOGEX 0, 0, 404, 248
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Output Volume", -1, 4, 4, 356, 80
+    GROUPBOX        "Output Volume", -1, 4, 2, 396, 90
 
-    LTEXT           "L",   -1,  12, 20,  10, 10
+    LTEXT           "Left",  -1,  12, 18,  20, 10
     CONTROL         "", IDC_OUTPUT_METER_L, "STATIC",
-                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 24, 18, 220, 12
+                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 36, 16, 240, 12
 
-    LTEXT           "R",   -1,  12, 36,  10, 10
+    LTEXT           "Right", -1,  12, 34,  24, 10
     CONTROL         "", IDC_OUTPUT_METER_R, "STATIC",
-                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 24, 34, 220, 12
+                    SS_OWNERDRAW | WS_CHILD | WS_VISIBLE, 36, 32, 240, 12
 
     CONTROL         "", IDC_OUTPUT_VOL, "msctls_trackbar32",
                     TBS_HORZ | TBS_NOTICKS | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                    24, 52, 220, 18
-    RTEXT           "0.0 dB", IDC_OUTPUT_VOL_VAL, 250, 54, 50, 10
+                    36, 52, 240, 18
+    RTEXT           "0.0 dB", IDC_OUTPUT_VOL_VAL, 282, 54, 50, 10
 
-    AUTOCHECKBOX    "Direct Monitor", IDC_DIRECT_MON, 12, 98, 100, 14
-    LTEXT           "(Not supported by hardware — software monitor only)",
-                    -1, 12, 114, 340, 10
+    AUTOCHECKBOX    "Direct Monitor", IDC_DIRECT_MON, 12, 106, 100, 14
+    LTEXT           "(Not supported by hardware)",
+                    -1, 116, 108, 280, 10
 END
 
 // ============================================================================
 // Advanced tab
 // ============================================================================
-IDD_TAB_ADVANCED DIALOGEX 0, 0, 364, 210
+IDD_TAB_ADVANCED DIALOGEX 0, 0, 404, 248
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Buffer Size:",        -1,              8, 14, 80, 10
-    COMBOBOX        IDC_ADV_BUFSIZE, 96, 12, 80, 80,
+    GROUPBOX        "Audio Settings", -1, 4, 2, 396, 80
+
+    LTEXT           "Buffer Size:",        -1,              12, 18, 80, 10
+    COMBOBOX        IDC_ADV_BUFSIZE, 100, 16, 90, 80,
                     CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL
 
-    LTEXT           "Sample Rate:",        -1,              8, 34, 80, 10
-    COMBOBOX        IDC_ADV_SAMPLERATE, 96, 32, 80, 40,
+    LTEXT           "Sample Rate:",        -1,              12, 38, 80, 10
+    COMBOBOX        IDC_ADV_SAMPLERATE, 100, 36, 90, 40,
                     CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_TABSTOP
 
-    LTEXT           "Round-trip latency:", -1,              8, 54, 90, 10
-    LTEXT           "—",                   IDC_ADV_LATENCY_DISP, 102, 54, 100, 10
+    LTEXT           "Round-trip latency:", -1,              12, 58, 85, 10
+    LTEXT           "---",                 IDC_ADV_LATENCY_DISP, 100, 58, 120, 10
 
-    LTEXT           "Auto-set target (dBFS):", -1,          8, 74, 100, 10
-    COMBOBOX        IDC_ADV_TARGET_DB, 112, 72, 60, 80,
+    GROUPBOX        "Calibration Settings", -1, 4, 86, 396, 60
+
+    LTEXT           "Auto-set target (dBFS):",   -1,       12, 102, 110, 10
+    COMBOBOX        IDC_ADV_TARGET_DB, 126, 100, 64, 80,
                     CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_TABSTOP
 
-    LTEXT           "Calibration duration (sec):", -1,      8, 94, 110, 10
-    COMBOBOX        IDC_ADV_CALIB_DUR, 122, 92, 50, 80,
+    LTEXT           "Calibration duration (sec):", -1,      12, 122, 110, 10
+    COMBOBOX        IDC_ADV_CALIB_DUR, 126, 120, 64, 80,
                     CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE | WS_TABSTOP
 
-    PUSHBUTTON      "Reset All to Defaults", IDC_ADV_RESET, 8, 120, 120, 16
+    PUSHBUTTON      "Reset All to Defaults", IDC_ADV_RESET, 12, 158, 130, 18
 END
 
 // ============================================================================
@@ -141,7 +160,7 @@ END
 IDD_CALIBRATION DIALOGEX 0, 0, 300, 160
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Auto Input Level Set"
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
     LTEXT           "Play your guitar at its LOUDEST expected level.",
                     IDC_CALIB_INSTRUCTION, 10, 10, 280, 20
@@ -176,7 +195,7 @@ BEGIN
             VALUE "FileDescription",  "Orange OMEC Teleport ASIO Driver"
             VALUE "FileVersion",      "1.0.0.0"
             VALUE "InternalName",     "OmecTeleportASIO"
-            VALUE "LegalCopyright",   "Free for personal use"
+            VALUE "LegalCopyright",   "MIT License. ASIO is a trademark of Steinberg Media Technologies GmbH."
             VALUE "OriginalFilename", "OmecTeleportASIO.dll"
             VALUE "ProductName",      "OmecTeleport ASIO"
             VALUE "ProductVersion",   "1.0.0.0"
