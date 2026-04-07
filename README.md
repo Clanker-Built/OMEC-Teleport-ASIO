@@ -155,3 +155,5 @@ This project is licensed under the [MIT License](LICENSE).
 The Steinberg ASIO SDK is required to build but is **not included** in this repository. It is subject to Steinberg's own licensing terms. See [ASIOSDK/README.md](ASIOSDK/README.md).
 
 "ASIO" is a trademark of Steinberg Media Technologies GmbH.
+
+The OMEC Teleport is a product of Orange Amplifiers. This project is not affiliated with, endorsed by, or sponsored by Orange Amplifiers or Steinberg Media Technologies GmbH.
