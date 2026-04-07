@@ -40,6 +40,7 @@
 #define IDC_OUTPUT_VOL        222
 #define IDC_OUTPUT_VOL_VAL    223
 #define IDC_DIRECT_MON        224
+#define IDC_SOFT_LIMITER      225
 
 // --- Advanced tab ---
 #define IDC_ADV_BUFSIZE       230

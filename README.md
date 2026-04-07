@@ -8,9 +8,22 @@ The OMEC Teleport's input stage runs hot, causing digital clipping before your D
 
 - **Digital input gain attenuation** -- tame the hot input before it reaches your plugins
 - **32-bit float ASIO buffers** -- full dynamic range, zero conversion overhead
-- **Auto Input Level Set** -- calibration that measures your loudest playing and sets gain to target -12 dBFS
+- **Auto Input Level Set** -- click, play your loudest, and the driver sets gain to target -12 dBFS
+- **Soft limiter** -- tanh-based soft clip at -1 dBFS prevents hard clipping on output
 - **Dark-themed control panel** -- embedded in the DLL with real-time peak meters, gain sliders, and calibration controls
 - **Low latency** -- tested clean at 64-sample buffers
+- **Drift correction** -- ring buffer trimming keeps latency stable over long sessions
+
+## Control Panel
+
+<p align="center">
+<img src="screenshots/CP1.png" alt="Device Status" width="45%"/>
+<img src="screenshots/CP2.png" alt="Input Controls" width="45%"/>
+</p>
+<p align="center">
+<img src="screenshots/CP3.png" alt="Output Controls" width="45%"/>
+<img src="screenshots/CP4.png" alt="Advanced" width="45%"/>
+</p>
 
 ## Architecture
 
@@ -52,6 +65,8 @@ If you have a pre-built `OmecTeleportASIO.dll`:
 2. Open an Administrator command prompt
 3. Run: `regsvr32 "C:\Program Files\OmecTeleportASIO\OmecTeleportASIO.dll"`
 
+Or download the latest release zip, extract, and right-click `install.bat` > **Run as administrator**.
+
 ## Setup
 
 ### Critical: Match Sample Rates
@@ -74,21 +89,20 @@ Mismatched rates will cause pitch shifting and distortion.
 5. Set sample rate to match your Windows Sound settings
 6. Click **Apply**
 
-### Control Panel
-
-Click the **Control Panel** button in your DAW's ASIO settings to access:
-
-- **Device Status** -- connection state, sample rate, buffer size, latency
-- **Input Controls** -- per-channel gain sliders (-60 to +12 dB), peak meters, Auto Input Level Set
-- **Output Controls** -- output volume, peak meters
-- **Advanced** -- buffer size, sample rate, calibration settings
-
 ### Auto Input Level Set
 
-1. Open the Control Panel > Input Controls tab
-2. Play your guitar at its **loudest expected level** (hardest strumming, loudest pickup)
-3. Click **Auto Set Input Level**
-4. The driver measures true peak over the calibration window and sets gain to target -12 dBFS
+1. Open the Control Panel > **Input Controls** tab
+2. Click **Auto Set Input Level**
+3. **Play your guitar at its loudest** (hardest strumming, loudest pickup) for the full countdown duration
+4. The driver measures true peak and sets gain so peaks land at -12 dBFS (top of green, barely yellow)
+
+### Peak Meter Colors
+
+| Color | Level | Meaning |
+|-------|-------|---------|
+| Green | Below -12 dBFS | Safe operating level |
+| Yellow | -12 to -3 dBFS | Getting hot |
+| Red | Above -3 dBFS | Clipping danger |
 
 ## Troubleshooting
 
@@ -99,6 +113,7 @@ Click the **Control Panel** button in your DAW's ASIO settings to access:
 | No sound at 44100 Hz | Set both endpoints to 48000 Hz in Windows Sound settings |
 | Driver not listed in DAW | Run `installer\install.bat` as Administrator |
 | Device not found after replug | Close and reopen your DAW -- WASAPI re-enumerates on restart |
+| Latency increases over time | Drift correction handles this automatically; if severe, restart the stream |
 
 ## Uninstalling
 
@@ -118,13 +133,15 @@ driver/
   src/
     OmecTeleportASIO.h/cpp    -- ASIO driver implementation
     WasapiEngine.h/cpp        -- WASAPI shared mode backend + ring buffers
-    GainProcessor.h/cpp       -- gain application + peak metering + calibration
+    GainProcessor.h/cpp       -- gain, peak metering, calibration, soft limiter
     TruePeakDetector.h        -- ITU-R BS.1770 true peak (4x oversampled)
     ControlPanel.h/cpp        -- Win32 dark-themed tabbed control panel
     RegistrySettings.h/cpp    -- persistent settings via HKCU registry
     Guids.h                   -- COM CLSID
     dllmain.cpp               -- COM factory + registration
     resource.h/rc             -- dialog resources
+    asio_logo.bmp             -- ASIO Compatible logo
+screenshots/                  -- control panel screenshots
 ASIOSDK/                      -- Steinberg ASIO SDK (not included, see README)
 installer/
   install.bat                 -- register DLL (run as admin)

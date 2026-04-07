@@ -161,7 +161,7 @@ void ControlPanel::paintMeter(HWND hCtrl, float level)
     {
         // Convert linear to dBFS for colour selection
         float db = (level > 1e-6f) ? 20.0f * std::log10(level) : -120.0f;
-        COLORREF col = (db > -6.0f) ? COL_RED : (db > -18.0f) ? COL_YELLOW : COL_GREEN;
+        COLORREF col = (db > -3.0f) ? COL_RED : (db > -12.0f) ? COL_YELLOW : COL_GREEN;
 
         RECT fill = rc;
         fill.right = rc.left + filledWidth;
@@ -347,10 +347,15 @@ void ControlPanel::refreshInputTab()
         }
         else
         {
-            // Still calibrating — update progress bar
-            if (m_calibSecondsRemaining > 0)
-                --m_calibSecondsRemaining;
-            // Progress bar position
+            // Still calibrating — update progress bar.
+            // Timer fires every 100ms; only decrement seconds every 10 ticks.
+            ++m_calibTickCount;
+            if (m_calibTickCount >= 10)
+            {
+                m_calibTickCount = 0;
+                if (m_calibSecondsRemaining > 0)
+                    --m_calibSecondsRemaining;
+            }
             if (m_settings)
             {
                 int total = static_cast<int>(m_settings->calibrationDuration);
@@ -359,7 +364,7 @@ void ControlPanel::refreshInputTab()
                 SendDlgItemMessageW(hTab, IDC_AUTOSET_PROGRESS, PBM_SETPOS, pct, 0);
 
                 wchar_t buf[64];
-                swprintf_s(buf, L"Calibrating... %d seconds remaining", m_calibSecondsRemaining);
+                swprintf_s(buf, L"PLAY LOUD! %d seconds remaining...", m_calibSecondsRemaining);
                 SetDlgItemTextW(hTab, IDC_AUTOSET_STATUS, buf);
             }
         }
@@ -553,8 +558,9 @@ INT_PTR CALLBACK ControlPanel::TabInputProc(HWND hDlg, UINT msg, WPARAM wParam, 
                 pThis->m_gain->beginCalibration(targetDB, duration);
                 pThis->m_calibActive = true;
                 pThis->m_calibSecondsRemaining = static_cast<int>(duration);
+                pThis->m_calibTickCount = 0;
                 EnableWindow(GetDlgItem(hDlg, IDC_AUTOSET_BTN), FALSE);
-                SetDlgItemTextW(hDlg, IDC_AUTOSET_STATUS, L"Calibrating... play your loudest note now!");
+                SetDlgItemTextW(hDlg, IDC_AUTOSET_STATUS, L"PLAY YOUR LOUDEST NOW! Strum hard for the full duration.");
             }
         }
         else if (id == IDC_INPUT_LINK)
@@ -593,7 +599,7 @@ INT_PTR CALLBACK ControlPanel::TabInputProc(HWND hDlg, UINT msg, WPARAM wParam, 
                 (db + 60.0f) / 66.0f * width, 0.0f, (float)width));
             if (filled > 0)
             {
-                COLORREF col = (db > -6.0f) ? COL_RED : (db > -18.0f) ? COL_YELLOW : COL_GREEN;
+                COLORREF col = (db > -3.0f) ? COL_RED : (db > -12.0f) ? COL_YELLOW : COL_GREEN;
                 RECT fill = { 0, 0, filled, rc.bottom };
                 HBRUSH hb = CreateSolidBrush(col);
                 FillRect(pDIS->hDC, &fill, hb);
@@ -638,6 +644,14 @@ INT_PTR CALLBACK ControlPanel::TabOutputProc(HWND hDlg, UINT msg, WPARAM wParam,
             SetDlgItemTextW(hDlg, IDC_OUTPUT_VOL_VAL, buf);
         }
 
+        // Soft limiter checkbox
+        if (pThis->m_settings)
+            CheckDlgButton(hDlg, IDC_SOFT_LIMITER,
+                           pThis->m_settings->softLimiterEnabled ? BST_CHECKED : BST_UNCHECKED);
+        if (pThis->m_gain)
+            pThis->m_gain->setSoftLimiterEnabled(
+                pThis->m_settings ? pThis->m_settings->softLimiterEnabled : true);
+
         applyDarkTheme(hDlg);
         return TRUE;
     }
@@ -647,6 +661,23 @@ INT_PTR CALLBACK ControlPanel::TabOutputProc(HWND hDlg, UINT msg, WPARAM wParam,
 
     switch (msg)
     {
+    case WM_COMMAND:
+    {
+        int id = LOWORD(wParam);
+        if (id == IDC_SOFT_LIMITER)
+        {
+            bool on = IsDlgButtonChecked(hDlg, IDC_SOFT_LIMITER) == BST_CHECKED;
+            if (pThis->m_gain)
+                pThis->m_gain->setSoftLimiterEnabled(on);
+            if (pThis->m_settings)
+            {
+                pThis->m_settings->softLimiterEnabled = on;
+                if (pThis->m_registry) pThis->m_registry->save(*pThis->m_settings);
+            }
+        }
+        return TRUE;
+    }
+
     case WM_HSCROLL:
     {
         HWND hSlider = reinterpret_cast<HWND>(lParam);
@@ -682,7 +713,7 @@ INT_PTR CALLBACK ControlPanel::TabOutputProc(HWND hDlg, UINT msg, WPARAM wParam,
                 (db + 60.0f) / 66.0f * width, 0.0f, (float)width));
             if (filled > 0)
             {
-                COLORREF col = (db > -6.0f) ? COL_RED : (db > -18.0f) ? COL_YELLOW : COL_GREEN;
+                COLORREF col = (db > -3.0f) ? COL_RED : (db > -12.0f) ? COL_YELLOW : COL_GREEN;
                 RECT fill = { pDIS->rcItem.left, pDIS->rcItem.top,
                               pDIS->rcItem.left + filled, pDIS->rcItem.bottom };
                 HBRUSH hb = CreateSolidBrush(col);
@@ -739,7 +770,7 @@ INT_PTR CALLBACK ControlPanel::TabAdvancedProc(HWND hDlg, UINT msg, WPARAM wPara
         // Target dB dropdown (–6 to –18 in 0.5 steps)
         float curTarget = pThis->m_settings ? pThis->m_settings->targetPeakDBFS : -12.0f;
         int selTarget = 0, idx = 0;
-        for (float db = -6.0f; db >= -18.0f; db -= 0.5f, ++idx)
+        for (float db = -6.0f; db >= -24.0f; db -= 0.5f, ++idx)
         {
             wchar_t buf[16];
             swprintf_s(buf, L"%.1f dBFS", db);

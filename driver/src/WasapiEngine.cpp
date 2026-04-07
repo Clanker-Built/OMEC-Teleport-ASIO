@@ -335,6 +335,26 @@ void WasapiEngine::audioThreadProc()
                 m_capIC->ReleaseBuffer(frames);
             }
 
+            // ---- Drift correction: discard excess capture data ----
+            // USB audio timing drifts over time, causing the ring to grow.
+            // Allow up to the full WASAPI buffer size in the ring. Only trim
+            // when drift has accumulated beyond that — roughly 20ms at 48kHz.
+            {
+                const uint32_t maxAllowed = m_capBufFrames * 2; // stereo samples
+                uint32_t avail = m_capRing.available();
+                if (avail > maxAllowed)
+                {
+                    float discard[MAX_BUF * 2];
+                    uint32_t target = asioBufSamples; // trim down to 1 ASIO buffer
+                    while (m_capRing.available() > target)
+                    {
+                        uint32_t toDrop = std::min(m_capRing.available() - target,
+                                                   (uint32_t)(MAX_BUF * 2));
+                        m_capRing.read(discard, toDrop);
+                    }
+                }
+            }
+
             // ---- Drain capture ring → ASIO callbacks ----
             while (m_capRing.available() >= asioBufSamples && m_running.load())
             {
@@ -344,11 +364,20 @@ void WasapiEngine::audioThreadProc()
 
                 m_capRing.read(capBuf, asioBufSamples);
 
+                // Feed calibration BEFORE gain — measures raw input level
+                if (m_gain && m_gain->isCalibrationActive())
+                    m_gain->feedCalibration(capBuf, static_cast<int>(m_asioBufSize),
+                                            m_deviceSampleRate);
+
                 if (m_gain)
                     m_gain->processInput(capBuf, static_cast<int>(m_asioBufSize));
 
                 if (m_asioFunc)
                     m_asioFunc(m_asioCtx, capBuf, renBuf, m_asioBufSize);
+
+                // Apply soft limiter to output before sending to hardware
+                if (m_gain)
+                    m_gain->applySoftLimiter(renBuf, static_cast<int>(m_asioBufSize));
 
                 if (m_outRing.freeSpace() >= asioBufSamples)
                     m_outRing.write(renBuf, asioBufSamples);

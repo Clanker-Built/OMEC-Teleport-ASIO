@@ -78,6 +78,7 @@ private:
     // Calibration state (UI thread only)
     bool                 m_calibActive   = false;
     int                  m_calibSecondsRemaining = 0;
+    int                  m_calibTickCount = 0;
     UINT_PTR             m_timerID       = 0;
     float                m_calibTargetDB = -12.0f;
 

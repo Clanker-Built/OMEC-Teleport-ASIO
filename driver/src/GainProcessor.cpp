@@ -16,6 +16,7 @@ GainProcessor::GainProcessor()
     , m_inputPeak_R(0.0f)
     , m_outputPeak_L(0.0f)
     , m_outputPeak_R(0.0f)
+    , m_softLimiter(true)
     , m_calibrating(false)
 {
 }
@@ -69,6 +70,28 @@ void GainProcessor::processOutput(float* buf, int numFrames) noexcept
 
     m_outputPeak_L.store(peakL, std::memory_order_release);
     m_outputPeak_R.store(peakR, std::memory_order_release);
+}
+
+// ---- Soft limiter -----------------------------------------------------------
+
+void GainProcessor::applySoftLimiter(float* buf, int numFrames) noexcept
+{
+    if (!m_softLimiter.load(std::memory_order_relaxed))
+        return;
+
+    // Threshold at -1 dBFS = 10^(-1/20) ~ 0.891
+    static constexpr float threshold = 0.891f;
+    static constexpr float invThresh = 1.0f / threshold;
+
+    for (int i = 0; i < numFrames * 2; ++i)
+    {
+        float s = buf[i];
+        if (s > threshold)
+            s = threshold * std::tanh(s * invThresh);
+        else if (s < -threshold)
+            s = -threshold * std::tanh(-s * invThresh);
+        buf[i] = s;
+    }
 }
 
 // ---- Gain control -----------------------------------------------------------

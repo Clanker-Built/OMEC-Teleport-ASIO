@@ -17,6 +17,7 @@ struct DriverSettings
     float    targetPeakDBFS      = -12.0f;  // calibration target, –6 to –18
     float    calibrationDuration = 8.0f;    // seconds
     bool     linkInputChannels   = true;    // L/R gain linked in UI
+    bool     softLimiterEnabled  = true;    // soft limiter at -1 dBFS on output
 };
 
 class RegistrySettings

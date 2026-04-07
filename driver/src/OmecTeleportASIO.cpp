@@ -59,6 +59,7 @@ OmecTeleportASIO::OmecTeleportASIO(LPUNKNOWN pUnk, HRESULT* phr)
     m_gain->setInputGainDB_L(m_settings.inputGainDB_L);
     m_gain->setInputGainDB_R(m_settings.inputGainDB_R);
     m_gain->setOutputVolumeDB(m_settings.outputVolumeDB);
+    m_gain->setSoftLimiterEnabled(m_settings.softLimiterEnabled);
 
     m_sampleRate.store(static_cast<double>(m_settings.sampleRate));
     m_bufferSize = static_cast<long>(m_settings.bufferSize);

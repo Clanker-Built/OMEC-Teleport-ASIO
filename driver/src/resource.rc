@@ -86,7 +86,7 @@ BEGIN
     AUTOCHECKBOX    "Link L/R", IDC_INPUT_LINK, 340, 50, 52, 14
 
     GROUPBOX        "Auto Input Level Set", -1, 4, 108, 396, 100
-    LTEXT           "Play your loudest note/chord, then click Auto Set.",
+    LTEXT           "Click Auto Set, then play your LOUDEST for the full duration.",
                     -1, 12, 122, 380, 10
     PUSHBUTTON      "Auto Set Input Level", IDC_AUTOSET_BTN, 12, 140, 120, 18
     CONTROL         "", IDC_AUTOSET_PROGRESS, "msctls_progress32",
@@ -116,9 +116,13 @@ BEGIN
                     36, 52, 240, 18
     RTEXT           "0.0 dB", IDC_OUTPUT_VOL_VAL, 282, 54, 50, 10
 
-    AUTOCHECKBOX    "Direct Monitor", IDC_DIRECT_MON, 12, 106, 100, 14
+    AUTOCHECKBOX    "Soft Limiter (-1 dBFS)", IDC_SOFT_LIMITER, 12, 100, 120, 14
+    LTEXT           "Prevents hard clipping on output peaks",
+                    -1, 136, 102, 260, 10
+
+    AUTOCHECKBOX    "Direct Monitor", IDC_DIRECT_MON, 12, 120, 100, 14
     LTEXT           "(Not supported by hardware)",
-                    -1, 116, 108, 280, 10
+                    -1, 116, 122, 280, 10
 END
 
 // ============================================================================
@@ -162,7 +166,7 @@ STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Auto Input Level Set"
 FONT 8, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Play your guitar at its LOUDEST expected level.",
+    LTEXT           "Play your guitar at its LOUDEST expected level NOW!",
                     IDC_CALIB_INSTRUCTION, 10, 10, 280, 20
 
     CONTROL         "", IDC_CALIB_METER, "STATIC",

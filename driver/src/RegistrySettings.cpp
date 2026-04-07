@@ -66,6 +66,7 @@ bool RegistrySettings::load(DriverSettings& out)
     out.targetPeakDBFS      = getFloat(hk,  L"targetPeakDBFS",      -12.0f);
     out.calibrationDuration = getFloat(hk,  L"calibrationDuration", 8.0f);
     out.linkInputChannels   = getDword(hk,  L"linkInputChannels",   1) != 0;
+    out.softLimiterEnabled  = getDword(hk,  L"softLimiterEnabled",  1) != 0;
 
     // Clamp loaded values to safe ranges
     if (out.inputGainDB_L < -60.0f) out.inputGainDB_L = -60.0f;
@@ -101,6 +102,7 @@ bool RegistrySettings::save(const DriverSettings& in)
     setFloat(hk, L"targetPeakDBFS",      in.targetPeakDBFS);
     setFloat(hk, L"calibrationDuration", in.calibrationDuration);
     setDword(hk, L"linkInputChannels",   in.linkInputChannels ? 1 : 0);
+    setDword(hk, L"softLimiterEnabled",  in.softLimiterEnabled ? 1 : 0);
 
     RegCloseKey(hk);
     return true;

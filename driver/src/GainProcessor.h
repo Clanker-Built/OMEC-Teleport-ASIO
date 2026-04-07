@@ -62,6 +62,13 @@ public:
     void  setOutputVolumeDB(float db) noexcept;
     float getOutputVolumeDB() const noexcept { return m_outputVolumeDB.load(std::memory_order_acquire); }
 
+    // Soft limiter on output — tanh-based soft clip at -1 dBFS
+    void setSoftLimiterEnabled(bool on) noexcept { m_softLimiter.store(on, std::memory_order_release); }
+    bool isSoftLimiterEnabled() const noexcept { return m_softLimiter.load(std::memory_order_acquire); }
+
+    // Apply soft limiter to interleaved stereo float buffer in-place.
+    void applySoftLimiter(float* buf, int numFrames) noexcept;
+
     // ---- Peak metering (UI thread reads) -----------------------------------
 
     float getInputPeakLinear_L() const noexcept  { return m_inputPeak_L.load(std::memory_order_acquire); }
@@ -115,6 +122,9 @@ private:
     std::atomic<float> m_inputPeak_R;
     std::atomic<float> m_outputPeak_L;
     std::atomic<float> m_outputPeak_R;
+
+    // Soft limiter
+    std::atomic<bool>  m_softLimiter;
 
     // Calibration state
     std::atomic<bool>  m_calibrating;
