@@ -335,27 +335,10 @@ void WasapiEngine::audioThreadProc()
                 m_capIC->ReleaseBuffer(frames);
             }
 
-            // ---- Drift correction: discard excess capture data ----
-            // USB audio timing drifts over time, causing the ring to grow.
-            // Allow up to the full WASAPI buffer size in the ring. Only trim
-            // when drift has accumulated beyond that — roughly 20ms at 48kHz.
-            {
-                const uint32_t maxAllowed = m_capBufFrames * 2; // stereo samples
-                uint32_t avail = m_capRing.available();
-                if (avail > maxAllowed)
-                {
-                    float discard[MAX_BUF * 2];
-                    uint32_t target = asioBufSamples; // trim down to 1 ASIO buffer
-                    while (m_capRing.available() > target)
-                    {
-                        uint32_t toDrop = std::min(m_capRing.available() - target,
-                                                   (uint32_t)(MAX_BUF * 2));
-                        m_capRing.read(discard, toDrop);
-                    }
-                }
-            }
-
             // ---- Drain capture ring → ASIO callbacks ----
+            // Process as many complete ASIO buffers as the ring holds.
+            // Drift correction runs AFTER draining so the drain naturally
+            // consumes most of the data — we only trim genuine excess.
             while (m_capRing.available() >= asioBufSamples && m_running.load())
             {
                 float capBuf[MAX_BUF * 2];
@@ -383,48 +366,95 @@ void WasapiEngine::audioThreadProc()
                     m_outRing.write(renBuf, asioBufSamples);
             }
 
+            // ---- Post-drain drift correction ----
+            // In steady state the drain loop consumes almost everything,
+            // leaving < 1 ASIO buffer of remainder. When heavy DSP (reverb,
+            // delay) makes bufferSwitch block longer, the capture ring can
+            // accumulate faster than it drains. Trim the excess here.
+            //
+            // Threshold: 1 WASAPI buffer OR 2 ASIO buffers (whichever larger).
+            // Anything beyond this is genuine drift, not normal jitter.
+            {
+                const uint32_t driftThreshold =
+                    std::max(m_capBufFrames * 2, asioBufSamples * 2);
+                const uint32_t avail = m_capRing.available();
+                if (avail > driftThreshold)
+                {
+                    float discard[MAX_BUF * 2];
+                    const uint32_t target = asioBufSamples;
+                    while (m_capRing.available() > target)
+                    {
+                        uint32_t toDrop = std::min(
+                            m_capRing.available() - target,
+                            static_cast<uint32_t>(MAX_BUF * 2));
+                        m_capRing.read(discard, toDrop);
+                    }
+                    ++m_driftTrimCount;
+                }
+            }
+
             // ---- Write output ring → WASAPI render ----
+            // Loop until the render buffer is full or the output ring is
+            // empty — prevents output data from piling up between cycles.
             if (m_renIC && m_renAC)
             {
-                UINT32 padding = 0;
-                m_renAC->GetCurrentPadding(&padding);
-                UINT32 available = m_renBufFrames - padding;
-
-                uint32_t outFrames = m_outRing.available() / 2;
-                uint32_t toWrite = std::min(outFrames, available);
-
-                if (toWrite > 0)
+                while (m_outRing.available() > 0)
                 {
+                    UINT32 padding = 0;
+                    m_renAC->GetCurrentPadding(&padding);
+                    UINT32 renderAvail = m_renBufFrames - padding;
+                    if (renderAvail == 0) break;
+
+                    uint32_t outFrames = m_outRing.available() / 2;
+                    uint32_t toWrite = std::min(outFrames, renderAvail);
+                    if (toWrite == 0) break;
+
                     BYTE* renData = nullptr;
-                    if (SUCCEEDED(m_renIC->GetBuffer(toWrite, &renData)))
+                    if (FAILED(m_renIC->GetBuffer(toWrite, &renData))) break;
+
+                    if (m_renIsFloat && m_renBps == 32 && m_renChannels == 2)
                     {
-                        if (m_renIsFloat && m_renBps == 32 && m_renChannels == 2)
+                        float* dst = reinterpret_cast<float*>(renData);
+                        m_outRing.read(dst, toWrite * 2);
+                    }
+                    else if (m_renIsFloat && m_renBps == 32)
+                    {
+                        m_outRing.read(m_tmpF32, toWrite * 2);
+                        float* dst = reinterpret_cast<float*>(renData);
+                        for (uint32_t i = 0; i < toWrite; ++i)
                         {
-                            // Direct float stereo passthrough
-                            float* dst = reinterpret_cast<float*>(renData);
-                            m_outRing.read(dst, toWrite * 2);
+                            dst[i * m_renChannels + 0] = m_tmpF32[i * 2 + 0];
+                            if (m_renChannels >= 2)
+                                dst[i * m_renChannels + 1] = m_tmpF32[i * 2 + 1];
+                            for (WORD c = 2; c < m_renChannels; ++c)
+                                dst[i * m_renChannels + c] = 0.f;
                         }
-                        else if (m_renIsFloat && m_renBps == 32)
-                        {
-                            // Multi-channel float — write L/R, zero others
-                            m_outRing.read(m_tmpF32, toWrite * 2);
-                            float* dst = reinterpret_cast<float*>(renData);
-                            for (uint32_t i = 0; i < toWrite; ++i)
-                            {
-                                dst[i * m_renChannels + 0] = m_tmpF32[i * 2 + 0];
-                                if (m_renChannels >= 2)
-                                    dst[i * m_renChannels + 1] = m_tmpF32[i * 2 + 1];
-                                for (WORD c = 2; c < m_renChannels; ++c)
-                                    dst[i * m_renChannels + c] = 0.f;
-                            }
-                        }
-                        else
-                        {
-                            // Fallback: silence
-                            m_outRing.read(m_tmpF32, toWrite * 2); // drain ring
-                            memset(renData, 0, toWrite * m_renChannels * (m_renBps / 8));
-                        }
-                        m_renIC->ReleaseBuffer(toWrite, 0);
+                    }
+                    else
+                    {
+                        m_outRing.read(m_tmpF32, toWrite * 2);
+                        memset(renData, 0, toWrite * m_renChannels * (m_renBps / 8));
+                    }
+                    m_renIC->ReleaseBuffer(toWrite, 0);
+                }
+            }
+
+            // ---- Output ring safety trim ----
+            // If the output ring has grown beyond 2× the render buffer,
+            // the render side can't keep up. Trim oldest output to
+            // prevent latency from building on the playback side.
+            {
+                const uint32_t outMax = m_renBufFrames * 4; // stereo samples
+                if (m_outRing.available() > outMax)
+                {
+                    float discard[MAX_BUF * 2];
+                    const uint32_t target = m_renBufFrames * 2;
+                    while (m_outRing.available() > target)
+                    {
+                        uint32_t toDrop = std::min(
+                            m_outRing.available() - target,
+                            static_cast<uint32_t>(MAX_BUF * 2));
+                        m_outRing.read(discard, toDrop);
                     }
                 }
             }

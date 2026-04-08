@@ -126,4 +126,7 @@ private:
     void*           m_asioCtx  = nullptr;
 
     GainProcessor* m_gain = nullptr;
+
+    // Drift diagnostics
+    uint32_t m_driftTrimCount = 0;
 };
