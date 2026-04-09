@@ -9,13 +9,19 @@
 
 #include <commctrl.h>
 #include <uxtheme.h>
+#include <winhttp.h>
+#include <shellapi.h>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <string>
+#include <thread>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "shell32.lib")
 
 HINSTANCE ControlPanel::s_hInstance = nullptr;
 
@@ -46,6 +52,112 @@ static int dbToSlider(float db)
 static float sliderToDb(int pos)
 {
     return SLIDER_MIN_DB + pos * (float)(SLIDER_MAX_DB - SLIDER_MIN_DB) / SLIDER_RANGE;
+}
+
+// ============================================================================
+// GitHub update check (background thread, no UI blocking)
+// ============================================================================
+
+#define WM_UPDATE_AVAILABLE (WM_USER + 100)
+
+// Global state — survives ControlPanel instances, checked once per DLL load.
+static struct {
+    std::atomic<bool> checked  {false};
+    std::atomic<bool> available{false};
+    std::atomic<bool> checking {false};
+    wchar_t version[32] = {};
+    wchar_t url[512]    = {};
+} g_update;
+
+static bool parseJsonString(const char* json, const char* key,
+                            char* out, size_t outLen)
+{
+    char pattern[64];
+    sprintf_s(pattern, "\"%s\"", key);
+    const char* pos = strstr(json, pattern);
+    if (!pos) return false;
+    pos += strlen(pattern);
+    while (*pos == ' ' || *pos == '\t' || *pos == ':' ||
+           *pos == '\n' || *pos == '\r') ++pos;
+    if (*pos != '"') return false;
+    ++pos;
+    size_t i = 0;
+    while (*pos && *pos != '"' && i < outLen - 1)
+        out[i++] = *pos++;
+    out[i] = '\0';
+    return i > 0;
+}
+
+static bool isNewerVersion(const char* remote, const char* local)
+{
+    if (*remote == 'v' || *remote == 'V') ++remote;
+    if (*local  == 'v' || *local  == 'V') ++local;
+    int rMaj = 0, rMin = 0, lMaj = 0, lMin = 0;
+    sscanf_s(remote, "%d.%d", &rMaj, &rMin);
+    sscanf_s(local,  "%d.%d", &lMaj, &lMin);
+    return (rMaj > lMaj) || (rMaj == lMaj && rMin > lMin);
+}
+
+static void updateCheckProc(HWND hDlg)
+{
+    HINTERNET hSession = WinHttpOpen(
+        L"OmecTeleportASIO/" OMEC_VERSION_TAG_W,
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) goto done;
+
+    WinHttpSetTimeouts(hSession, 5000, 5000, 10000, 10000);
+
+    {
+        HINTERNET hConn = WinHttpConnect(hSession, L"api.github.com",
+                                          INTERNET_DEFAULT_HTTPS_PORT, 0);
+        if (!hConn) { WinHttpCloseHandle(hSession); goto done; }
+
+        HINTERNET hReq = WinHttpOpenRequest(
+            hConn, L"GET",
+            L"/repos/Clanker-Built/OMEC-Teleport-ASIO/releases/latest",
+            nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+            WINHTTP_FLAG_SECURE);
+        if (!hReq) { WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSession); goto done; }
+
+        if (!WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+            !WinHttpReceiveResponse(hReq, nullptr))
+        {
+            WinHttpCloseHandle(hReq); WinHttpCloseHandle(hConn);
+            WinHttpCloseHandle(hSession); goto done;
+        }
+
+        std::string body;
+        DWORD avail = 0;
+        while (WinHttpQueryDataAvailable(hReq, &avail) && avail > 0)
+        {
+            std::string chunk(avail, '\0');
+            DWORD bytesRead = 0;
+            WinHttpReadData(hReq, &chunk[0], avail, &bytesRead);
+            body.append(chunk.data(), bytesRead);
+        }
+
+        WinHttpCloseHandle(hReq);
+        WinHttpCloseHandle(hConn);
+        WinHttpCloseHandle(hSession);
+
+        char tagName[32] = {}, htmlUrl[512] = {};
+        if (parseJsonString(body.c_str(), "tag_name", tagName, sizeof(tagName)) &&
+            parseJsonString(body.c_str(), "html_url", htmlUrl, sizeof(htmlUrl)) &&
+            isNewerVersion(tagName, OMEC_VERSION_TAG))
+        {
+            MultiByteToWideChar(CP_UTF8, 0, tagName, -1, g_update.version, 32);
+            MultiByteToWideChar(CP_UTF8, 0, htmlUrl, -1, g_update.url, 512);
+            g_update.available.store(true);
+            if (IsWindow(hDlg))
+                PostMessageW(hDlg, WM_UPDATE_AVAILABLE, 0, 0);
+        }
+    }
+
+done:
+    g_update.checking.store(false);
+    g_update.checked.store(true);
 }
 
 // ============================================================================
@@ -411,6 +523,18 @@ INT_PTR CALLBACK ControlPanel::MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, L
 
         // Start refresh timer (100 ms) — fires WM_TIMER in the modal loop
         pThis->m_timerID = SetTimer(hDlg, 1, 100, nullptr);
+
+        // Launch background update check (once per DLL load)
+        if (!g_update.checked.load() && !g_update.checking.load())
+        {
+            g_update.checking.store(true);
+            std::thread(updateCheckProc, hDlg).detach();
+        }
+        else if (g_update.available.load())
+        {
+            PostMessageW(hDlg, WM_UPDATE_AVAILABLE, 0, 0);
+        }
+
         return TRUE;
     }
 
@@ -432,6 +556,24 @@ INT_PTR CALLBACK ControlPanel::MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, L
         {
             int sel = TabCtrl_GetCurSel(GetDlgItem(hDlg, IDC_TAB));
             pThis->switchTab(sel);
+        }
+        return TRUE;
+    }
+
+    case WM_UPDATE_AVAILABLE:
+    {
+        // Show notification on the Device Status tab
+        HWND hStatus = pThis->m_hTabs[0];
+        if (hStatus && IsWindow(hStatus))
+        {
+            wchar_t buf[64];
+            swprintf_s(buf, L"Update available: %s", g_update.version);
+            SetDlgItemTextW(hStatus, IDC_STATUS_UPDATE, buf);
+
+            wchar_t btnText[64];
+            swprintf_s(btnText, L"Download %s", g_update.version);
+            SetDlgItemTextW(hStatus, IDC_STATUS_UPDATE_BTN, btnText);
+            ShowWindow(GetDlgItem(hStatus, IDC_STATUS_UPDATE_BTN), SW_SHOW);
         }
         return TRUE;
     }
@@ -874,6 +1016,13 @@ INT_PTR CALLBACK ControlPanel::TabStatusProc(HWND hDlg, UINT msg, WPARAM wParam,
         ControlPanel* pThis = reinterpret_cast<ControlPanel*>(lParam);
         SetWindowLongPtrW(hDlg, DWLP_USER, reinterpret_cast<LONG_PTR>(pThis));
 
+        // Set version text from the single OMEC_VERSION_TAG define
+        SetDlgItemTextW(hDlg, IDC_STATUS_VERSION,
+                         L"Orange OMEC Teleport ASIO Driver v" OMEC_VERSION_TAG_W);
+
+        // Hide update button until the background check finds a newer release
+        ShowWindow(GetDlgItem(hDlg, IDC_STATUS_UPDATE_BTN), SW_HIDE);
+
         // Load and display the ASIO Compatible logo
         HBITMAP hLogo = LoadBitmapW(s_hInstance, MAKEINTRESOURCEW(IDB_ASIO_LOGO));
         if (hLogo)
@@ -886,8 +1035,28 @@ INT_PTR CALLBACK ControlPanel::TabStatusProc(HWND hDlg, UINT msg, WPARAM wParam,
 
     switch (msg)
     {
-    case WM_CTLCOLORDLG:
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_STATUS_UPDATE_BTN)
+        {
+            if (g_update.url[0])
+                ShellExecuteW(nullptr, L"open", g_update.url,
+                              nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        return TRUE;
+
     case WM_CTLCOLORSTATIC:
+    {
+        HDC hdc = reinterpret_cast<HDC>(wParam);
+        // Highlight the update notification text in blue
+        if (GetDlgCtrlID(reinterpret_cast<HWND>(lParam)) == IDC_STATUS_UPDATE)
+            SetTextColor(hdc, COL_HIGHLIGHT);
+        else
+            SetTextColor(hdc, COL_TEXT);
+        SetBkColor(hdc, COL_BG);
+        return reinterpret_cast<INT_PTR>(g_hBrBg);
+    }
+
+    case WM_CTLCOLORDLG:
     case WM_CTLCOLORBTN:
         SetTextColor(reinterpret_cast<HDC>(wParam), COL_TEXT);
         SetBkColor(reinterpret_cast<HDC>(wParam), COL_BG);

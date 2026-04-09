@@ -58,8 +58,24 @@
 #define IDC_CALIB_CANCEL_BTN  244
 #define IDC_CALIB_INSTRUCTION 245
 
+// --- Update notification & version (Device Status tab) ---
+#define IDC_STATUS_UPDATE     208
+#define IDC_STATUS_UPDATE_BTN 209
+#define IDC_STATUS_VERSION    250
+
 // Bitmaps
 #define IDB_ASIO_LOGO         280
+
+// ==========================================================================
+// VERSION — change ONLY these defines for each release.
+// Everything else (VERSIONINFO, About text, update check) reads from here.
+// ==========================================================================
+#define OMEC_VERSION_MAJOR    1
+#define OMEC_VERSION_MINOR    5
+#define OMEC_VERSION_PATCH    0
+#define OMEC_VERSION_TAG      "1.5"
+#define OMEC_VERSION_TAG_W    L"1.5"
+#define OMEC_VERSION_FILE_STR "1.5.0.0"
 
 // Version info string table
 #define IDS_DRIVER_NAME       301

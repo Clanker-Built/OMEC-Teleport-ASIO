@@ -50,12 +50,15 @@ BEGIN
                     SS_BITMAP | WS_CHILD | WS_VISIBLE, 316, 10, 80, 75
 
     GROUPBOX        "About", -1, 4, 106, 396, 56
-    LTEXT           "Orange OMEC Teleport ASIO Driver v1.0",
-                    -1, 12, 120, 380, 10
+    LTEXT           "", IDC_STATUS_VERSION, 12, 120, 380, 10
     LTEXT           "Low-latency custom driver with digital input gain control",
                     -1, 12, 132, 380, 10
     LTEXT           "ASIO is a trademark of Steinberg Media Technologies GmbH",
                     -1, 12, 144, 380, 10
+
+    LTEXT           "", IDC_STATUS_UPDATE, 12, 172, 290, 10
+    PUSHBUTTON      "Download", IDC_STATUS_UPDATE_BTN, 310, 170, 86, 14,
+                    WS_CHILD  // initially hidden (no WS_VISIBLE)
 END
 
 // ============================================================================
@@ -184,8 +187,8 @@ END
 // Version info
 // ============================================================================
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1, 0, 0, 0
-PRODUCTVERSION  1, 0, 0, 0
+FILEVERSION     OMEC_VERSION_MAJOR, OMEC_VERSION_MINOR, OMEC_VERSION_PATCH, 0
+PRODUCTVERSION  OMEC_VERSION_MAJOR, OMEC_VERSION_MINOR, OMEC_VERSION_PATCH, 0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0
 FILEOS          VOS_NT_WINDOWS32
@@ -197,12 +200,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "OmecTeleport ASIO Project"
             VALUE "FileDescription",  "Orange OMEC Teleport ASIO Driver"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      OMEC_VERSION_FILE_STR
             VALUE "InternalName",     "OmecTeleportASIO"
             VALUE "LegalCopyright",   "MIT License. ASIO is a trademark of Steinberg Media Technologies GmbH."
             VALUE "OriginalFilename", "OmecTeleportASIO.dll"
             VALUE "ProductName",      "OmecTeleport ASIO"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   OMEC_VERSION_FILE_STR
         END
     END
     BLOCK "VarFileInfo"

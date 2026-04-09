@@ -3,6 +3,7 @@
 //-----------------------------------------------------------------------------
 
 #include "OmecTeleportASIO.h"
+#include "resource.h"
 #include <initguid.h>   // must precede Guids.h to emit DEFINE_GUID definitions
 #include "Guids.h"
 #include <cstring>
@@ -114,7 +115,7 @@ void OmecTeleportASIO::getDriverName(char* name)
 
 long OmecTeleportASIO::getDriverVersion()
 {
-    return 0x00010000;  // v1.0
+    return (OMEC_VERSION_MAJOR << 16) | (OMEC_VERSION_MINOR << 8) | OMEC_VERSION_PATCH;
 }
 
 void OmecTeleportASIO::getErrorMessage(char* string)
