@@ -57,8 +57,10 @@ BEGIN
                     -1, 12, 144, 380, 10
 
     LTEXT           "", IDC_STATUS_UPDATE, 12, 172, 290, 10
+    // NOT WS_VISIBLE is required to actually hide it: RC shorthand styles
+    // are OR'ed onto defaults, which already include WS_VISIBLE.
     PUSHBUTTON      "Download", IDC_STATUS_UPDATE_BTN, 310, 170, 86, 14,
-                    WS_CHILD  // initially hidden (no WS_VISIBLE)
+                    NOT WS_VISIBLE
 END
 
 // ============================================================================

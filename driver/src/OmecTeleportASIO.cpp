@@ -149,6 +149,7 @@ ASIOError OmecTeleportASIO::start()
     // Set the ASIO callback — the audio thread calls this with exactly
     // bs frames, using a ring buffer to bridge any WASAPI/ASIO mismatch.
     m_usb->setAsioCallback(asioCallback, this, bs);
+    m_usb->setResetRequestCallback(engineResetRequest, this);
 
     if (!m_usb->start(sr, bs))
     {
@@ -156,14 +157,30 @@ ASIOError OmecTeleportASIO::start()
         return ASE_HWMalfunction;
     }
 
-    const long actual = static_cast<long>(m_usb->actualFrames());
-    OMEC_TRACEF("  ASIO bufferSize=%ld  WASAPI actual=%ld", m_bufferSize, actual);
+    // The engine normally runs at the requested rate (AUTOCONVERTPCM); if it
+    // had to fall back to the endpoint mix rate, adopt it and tell the host
+    // rather than lying about the clock.
+    const uint32_t actualSr = m_usb->deviceSampleRate();
+    if (actualSr != sr && actualSr != 0)
+    {
+        OMEC_TRACEF("  Stream rate %u differs from requested %u — notifying host",
+                    actualSr, sr);
+        m_sampleRate.store(static_cast<double>(actualSr));
+        if (m_callbacks && m_callbacks->sampleRateDidChange)
+            m_callbacks->sampleRateDidChange(static_cast<ASIOSampleRate>(actualSr));
+    }
 
-    // Compute latency using WASAPI period (real hardware latency)
-    m_inputLatencySamples.store(actual + m_bufferSize);
-    m_outputLatencySamples.store(actual + m_bufferSize);
-    m_inputLatMs.store(static_cast<float>((actual + m_bufferSize) * 1000.0 / sr));
-    m_outputLatMs.store(static_cast<float>((actual + m_bufferSize) * 1000.0 / sr));
+    // Honest latency: WASAPI engine buffers + ring residency + ASIO buffer,
+    // as computed by the engine — not just the ASIO double-buffer.
+    const long inLat  = static_cast<long>(m_usb->inputLatencyFrames());
+    const long outLat = static_cast<long>(m_usb->outputLatencyFrames());
+    const double rateNow = m_sampleRate.load();
+    OMEC_TRACEF("  ASIO bufferSize=%ld  latency in=%ld out=%ld frames @ %.0f Hz",
+                m_bufferSize, inLat, outLat, rateNow);
+    m_inputLatencySamples.store(inLat);
+    m_outputLatencySamples.store(outLat);
+    m_inputLatMs.store(static_cast<float>(inLat * 1000.0 / rateNow));
+    m_outputLatMs.store(static_cast<float>(outLat * 1000.0 / rateNow));
 
     m_samplePos.store(0);
     m_streamRunning.store(true, std::memory_order_release);
@@ -172,11 +189,15 @@ ASIOError OmecTeleportASIO::start()
 
 ASIOError OmecTeleportASIO::stop()
 {
-    if (!m_streamRunning.load())
-        return ASE_OK;
-
+    // No early-return on !m_streamRunning: the engine's fatal-error path
+    // clears the flag itself before the host reacts to kAsioResetRequest,
+    // and the engine must still be torn down here or its stream objects
+    // leak on every reset cycle.  m_usb->stop() is idempotent.
     m_streamRunning.store(false, std::memory_order_release);
     m_usb->stop();
+    // A calibration window can't complete without audio flowing — cancel it
+    // so a stale window is never applied after a later restart.
+    m_gain->cancelCalibration();
     return ASE_OK;
 }
 
@@ -195,18 +216,31 @@ ASIOError OmecTeleportASIO::getLatencies(long* inputLatency, long* outputLatency
 {
     *inputLatency  = m_inputLatencySamples.load();
     *outputLatency = m_outputLatencySamples.load();
-    if (*inputLatency == 0)
-        *inputLatency = *outputLatency = m_bufferSize * 2;
+    if (*inputLatency == 0 || *outputLatency == 0)
+    {
+        // Not started yet — estimate honestly instead of quoting the bare
+        // double-buffer: shared-mode WASAPI adds roughly a 10 ms period on
+        // capture (engine buffer ~2 periods) and period + ring target on
+        // render.
+        const double sr = m_sampleRate.load();
+        *inputLatency  = m_bufferSize + static_cast<long>(sr * 0.022);
+        *outputLatency = m_bufferSize + static_cast<long>(sr * 0.032);
+    }
     return ASE_OK;
 }
 
 ASIOError OmecTeleportASIO::getBufferSize(long* minSize, long* maxSize,
                                            long* preferredSize, long* granularity)
 {
-    *minSize       = 64;
-    *maxSize       = 2048;
-    *preferredSize = 128;
-    *granularity   = -1;   // powers of 2
+    *minSize     = 64;
+    *maxSize     = 2048;
+    *granularity = -1;   // powers of 2
+
+    // Surface the user's saved preference (control panel, Advanced tab) so
+    // the host actually opens the stream at the size the user chose.
+    long pref = static_cast<long>(m_settings.bufferSize);
+    const bool validPow2 = pref >= 64 && pref <= 2048 && (pref & (pref - 1)) == 0;
+    *preferredSize = validPow2 ? pref : 128;
     return ASE_OK;
 }
 
@@ -230,17 +264,29 @@ ASIOError OmecTeleportASIO::setSampleRate(ASIOSampleRate sampleRate)
     if (sampleRate != 44100.0 && sampleRate != 48000.0)
         return ASE_NoClock;
 
-    const bool changed = (m_sampleRate.load() != sampleRate);
+    const double oldRate = m_sampleRate.load();
+    const bool changed   = (oldRate != sampleRate);
     m_sampleRate.store(sampleRate);
-    m_settings.sampleRate = static_cast<uint32_t>(sampleRate);
-    m_registry->save(m_settings);
 
     if (changed && m_streamRunning.load())
     {
-        // Restart streaming at new rate
+        // Restart streaming at the new rate — and actually check the result.
         stop();
-        start();
+        if (start() != ASE_OK)
+        {
+            // Could not run at the new rate: best-effort restore of the old
+            // one, and tell the host the new rate was not accepted.
+            OMEC_TRACEF("setSampleRate: restart @%.0f failed — reverting to %.0f",
+                        sampleRate, oldRate);
+            m_sampleRate.store(oldRate);
+            start();   // best effort; if this also fails the stream stays stopped
+            return ASE_NoClock;
+        }
     }
+
+    // Persist only after the rate change actually took effect.
+    m_settings.sampleRate = static_cast<uint32_t>(m_sampleRate.load());
+    m_registry->save(m_settings);
     return ASE_OK;
 }
 
@@ -297,10 +343,15 @@ ASIOError OmecTeleportASIO::getChannelInfo(ASIOChannelInfo* info)
 ASIOError OmecTeleportASIO::createBuffers(ASIOBufferInfo* bufferInfos, long numChannels,
                                           long bufferSize, ASIOCallbacks* callbacks)
 {
-    if (numChannels != 4 && numChannels != 2)
-        return ASE_InvalidParameter;
-    if (bufferSize < 32 || bufferSize > 2048)
-        return ASE_InvalidParameter;
+    // numChannels is whatever subset of I/O channels the host activates
+    // (asio.h: an arbitrary sum of inputs and outputs) — e.g. 1 mono input
+    // + 2 outputs = 3.  We have 2 in + 2 out, so 1..4 are all serviceable.
+    if (numChannels < 1 || numChannels > 4)
+        return ASE_InvalidMode;
+    // Enforce what getBufferSize advertises: 64..2048, powers of two.
+    if (bufferSize < 64 || bufferSize > 2048 ||
+        (bufferSize & (bufferSize - 1)) != 0)
+        return ASE_InvalidMode;
     if (!callbacks)
         return ASE_InvalidParameter;
 
@@ -308,7 +359,9 @@ ASIOError OmecTeleportASIO::createBuffers(ASIOBufferInfo* bufferInfos, long numC
 
     m_bufferSize = bufferSize;
     m_bufferSizeAtomic.store(bufferSize);
-    m_settings.bufferSize = static_cast<uint32_t>(bufferSize);
+    // Deliberately NOT persisted to m_settings.bufferSize: the host's
+    // transient choice must not clobber the user's saved preference,
+    // which getBufferSize() surfaces as preferredSize.
     m_callbacks = callbacks;
 
     // Set up buffer pointers for host.
@@ -385,6 +438,20 @@ ASIOError OmecTeleportASIO::outputReady()
     // Host signals output buffers are ready — set event to allow OUT thread to proceed
     SetEvent(m_outputReadyEvent);
     return ASE_OK;
+}
+
+// ============================================================================
+// Engine fatal-error path — called from the audio thread when the stream
+// dies unrecoverably (device removal, engine fault).  Mark the stream
+// stopped and ask the host to reset the driver; hosts handle
+// kAsioResetRequest asynchronously (stop/dispose/re-init).
+void OmecTeleportASIO::engineResetRequest(void* ctx)
+{
+    auto* self = static_cast<OmecTeleportASIO*>(ctx);
+    self->m_streamRunning.store(false, std::memory_order_release);
+    std::strcpy(self->m_errorMsg, "Audio stream lost (device removed?) — reset requested.");
+    if (self->m_callbacks && self->m_callbacks->asioMessage)
+        self->m_callbacks->asioMessage(kAsioResetRequest, 0, nullptr, nullptr);
 }
 
 // ============================================================================

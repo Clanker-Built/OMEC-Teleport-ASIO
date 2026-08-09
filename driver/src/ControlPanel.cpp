@@ -14,13 +14,13 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
 #include <string>
-#include <thread>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "winhttp.lib")   // delay-loaded — see DelayLoadDLLs in driver.vcxproj
 #pragma comment(lib, "shell32.lib")
 
 HINSTANCE ControlPanel::s_hInstance = nullptr;
@@ -56,22 +56,37 @@ static float sliderToDb(int pos)
 
 // ============================================================================
 // GitHub update check (background thread, no UI blocking)
+//
+// The worker never touches a window handle: it publishes its result in
+// g_update and the 100 ms status-tab timer polls it, so a panel closed and
+// reopened mid-check still shows the notification.  The DLL is pinned for
+// the thread's lifetime (GetModuleHandleEx + FreeLibraryAndExitThread) so
+// the host can never unload it out from under the thread.  kDone is latched
+// only after a completed HTTP 200 exchange; failures return to kIdle so the
+// next panel open retries.
 // ============================================================================
 
-#define WM_UPDATE_AVAILABLE (WM_USER + 100)
+namespace {
 
-// Global state — survives ControlPanel instances, checked once per DLL load.
-static struct {
-    std::atomic<bool> checked  {false};
+enum UpdateState : int { kIdle = 0, kRunning = 1, kDone = 2 };
+
+struct UpdateInfo {
+    std::atomic<int>  state{kIdle};
+    // version/url are written by the single worker thread before the
+    // release-store of `available`; the UI thread reads them only after an
+    // acquire-load sees `available` == true.
     std::atomic<bool> available{false};
-    std::atomic<bool> checking {false};
     wchar_t version[32] = {};
     wchar_t url[512]    = {};
-} g_update;
+};
+UpdateInfo g_update;
+
+} // namespace
 
 static bool parseJsonString(const char* json, const char* key,
                             char* out, size_t outLen)
 {
+    if (outLen == 0) return false;
     char pattern[64];
     sprintf_s(pattern, "\"%s\"", key);
     const char* pos = strstr(json, pattern);
@@ -88,76 +103,178 @@ static bool parseJsonString(const char* json, const char* key,
     return i > 0;
 }
 
-static bool isNewerVersion(const char* remote, const char* local)
+// Parse up to three numeric fields from a tag like "v1.5.1", "1.6", or
+// "release-1.5.2" (leading non-digits are skipped).  Missing fields are 0.
+static bool parseVersionTag(const char* tag, int& maj, int& min, int& pat)
 {
-    if (*remote == 'v' || *remote == 'V') ++remote;
-    if (*local  == 'v' || *local  == 'V') ++local;
-    int rMaj = 0, rMin = 0, lMaj = 0, lMin = 0;
-    sscanf_s(remote, "%d.%d", &rMaj, &rMin);
-    sscanf_s(local,  "%d.%d", &lMaj, &lMin);
-    return (rMaj > lMaj) || (rMaj == lMaj && rMin > lMin);
+    while (*tag && (*tag < '0' || *tag > '9')) ++tag;
+    if (!*tag) return false;
+    maj = min = pat = 0;
+    return sscanf_s(tag, "%d.%d.%d", &maj, &min, &pat) >= 1;
 }
 
-static void updateCheckProc(HWND hDlg)
+static bool isNewerThanLocal(const char* remoteTag)
 {
+    int rMaj = 0, rMin = 0, rPat = 0;
+    if (!parseVersionTag(remoteTag, rMaj, rMin, rPat)) return false;
+    if (rMaj != OMEC_VERSION_MAJOR) return rMaj > OMEC_VERSION_MAJOR;
+    if (rMin != OMEC_VERSION_MINOR) return rMin > OMEC_VERSION_MINOR;
+    return rPat > OMEC_VERSION_PATCH;
+}
+
+enum class CheckResult { Failed, Completed };
+
+static CheckResult doUpdateCheck()
+{
+    // Automatic proxy resolution (per-user / IE / WPAD-PAC aware); fall back
+    // to the machine-wide WinHTTP proxy on systems without it.
     HINTERNET hSession = WinHttpOpen(
         L"OmecTeleportASIO/" OMEC_VERSION_TAG_W,
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) goto done;
+    if (!hSession)
+        hSession = WinHttpOpen(
+            L"OmecTeleportASIO/" OMEC_VERSION_TAG_W,
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return CheckResult::Failed;
 
-    WinHttpSetTimeouts(hSession, 5000, 5000, 10000, 10000);
+    WinHttpSetTimeouts(hSession, 5000, 5000, 10000, 5000);
 
-    {
-        HINTERNET hConn = WinHttpConnect(hSession, L"api.github.com",
-                                          INTERNET_DEFAULT_HTTPS_PORT, 0);
-        if (!hConn) { WinHttpCloseHandle(hSession); goto done; }
-
-        HINTERNET hReq = WinHttpOpenRequest(
+    HINTERNET hConn = WinHttpConnect(hSession, L"api.github.com",
+                                      INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hReq = nullptr;
+    if (hConn)
+        hReq = WinHttpOpenRequest(
             hConn, L"GET",
             L"/repos/Clanker-Built/OMEC-Teleport-ASIO/releases/latest",
             nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
             WINHTTP_FLAG_SECURE);
-        if (!hReq) { WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSession); goto done; }
 
-        if (!WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-            !WinHttpReceiveResponse(hReq, nullptr))
-        {
-            WinHttpCloseHandle(hReq); WinHttpCloseHandle(hConn);
-            WinHttpCloseHandle(hSession); goto done;
-        }
+    bool ok = hReq &&
+              WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                 WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+              WinHttpReceiveResponse(hReq, nullptr);
 
-        std::string body;
-        DWORD avail = 0;
-        while (WinHttpQueryDataAvailable(hReq, &avail) && avail > 0)
+    if (ok)
+    {
+        DWORD status = 0, sz = sizeof(status);
+        ok = WinHttpQueryHeaders(hReq,
+                 WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                 WINHTTP_HEADER_NAME_BY_INDEX,
+                 &status, &sz, WINHTTP_NO_HEADER_INDEX)
+             && status == 200;
+    }
+
+    std::string body;
+    if (ok)
+    {
+        // Hard bounds: 15 s wall clock, 1 MB body.  Real payload is ~20 KB.
+        const ULONGLONG deadline = GetTickCount64() + 15000;
+        constexpr size_t kMaxBody = 1024 * 1024;
+        for (;;)
         {
-            std::string chunk(avail, '\0');
+            DWORD avail = 0;
+            if (!WinHttpQueryDataAvailable(hReq, &avail)) { ok = false; break; }
+            if (avail == 0) break;   // end of response
+            if (GetTickCount64() > deadline ||
+                body.size() + avail > kMaxBody) { ok = false; break; }
+            const size_t offset = body.size();
+            body.resize(offset + avail);
             DWORD bytesRead = 0;
-            WinHttpReadData(hReq, &chunk[0], avail, &bytesRead);
-            body.append(chunk.data(), bytesRead);
-        }
-
-        WinHttpCloseHandle(hReq);
-        WinHttpCloseHandle(hConn);
-        WinHttpCloseHandle(hSession);
-
-        char tagName[32] = {}, htmlUrl[512] = {};
-        if (parseJsonString(body.c_str(), "tag_name", tagName, sizeof(tagName)) &&
-            parseJsonString(body.c_str(), "html_url", htmlUrl, sizeof(htmlUrl)) &&
-            isNewerVersion(tagName, OMEC_VERSION_TAG))
-        {
-            MultiByteToWideChar(CP_UTF8, 0, tagName, -1, g_update.version, 32);
-            MultiByteToWideChar(CP_UTF8, 0, htmlUrl, -1, g_update.url, 512);
-            g_update.available.store(true);
-            if (IsWindow(hDlg))
-                PostMessageW(hDlg, WM_UPDATE_AVAILABLE, 0, 0);
+            if (!WinHttpReadData(hReq, &body[offset], avail, &bytesRead))
+            { ok = false; break; }
+            body.resize(offset + bytesRead);
+            if (bytesRead == 0) break;
         }
     }
 
-done:
-    g_update.checking.store(false);
-    g_update.checked.store(true);
+    if (hReq)  WinHttpCloseHandle(hReq);
+    if (hConn) WinHttpCloseHandle(hConn);
+    WinHttpCloseHandle(hSession);
+
+    if (!ok) return CheckResult::Failed;
+
+    char tagName[32] = {}, htmlUrl[512] = {};
+    if (parseJsonString(body.c_str(), "tag_name", tagName, sizeof(tagName)) &&
+        parseJsonString(body.c_str(), "html_url", htmlUrl, sizeof(htmlUrl)) &&
+        strncmp(htmlUrl, "https://github.com/", 19) == 0 &&   // only ever open GitHub
+        strstr(htmlUrl, "/releases/") != nullptr &&           // ...release pages
+        isNewerThanLocal(tagName))
+    {
+        MultiByteToWideChar(CP_UTF8, 0, tagName, -1, g_update.version, 32);
+        MultiByteToWideChar(CP_UTF8, 0, htmlUrl, -1, g_update.url, 512);
+        g_update.available.store(true, std::memory_order_release);
+    }
+    return CheckResult::Completed;
+}
+
+// winhttp.dll is delay-loaded; if the loader ever fails to bind it, the
+// delay-load helper raises one of these SEH codes at the first WinHttp call.
+// Treat that as a failed (retryable) check instead of crashing the host.
+// The filter is narrow on purpose — unrelated faults still crash loudly.
+static DWORD delayLoadFilter(DWORD code)
+{
+    constexpr DWORD kDelayLoadModNotFound  = 0xC06D007E;  // VcppException(ERROR_MOD_NOT_FOUND)
+    constexpr DWORD kDelayLoadProcNotFound = 0xC06D007F;  // VcppException(ERROR_PROC_NOT_FOUND)
+    return (code == kDelayLoadModNotFound || code == kDelayLoadProcNotFound)
+        ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Separate frame with no unwindable C++ objects so __try is legal (C2712).
+static CheckResult doUpdateCheckGuarded()
+{
+    __try
+    {
+        return doUpdateCheck();
+    }
+    __except (delayLoadFilter(GetExceptionCode()))
+    {
+        return CheckResult::Failed;
+    }
+}
+
+static DWORD WINAPI updateCheckThreadProc(LPVOID param)
+{
+    HMODULE hSelf = static_cast<HMODULE>(param);
+    CheckResult r = doUpdateCheckGuarded();
+    g_update.state.store(r == CheckResult::Completed ? kDone : kIdle,
+                         std::memory_order_release);
+    // Releases the module pin taken in startUpdateCheckOnce() and exits
+    // without ever returning into (possibly unloaded) module code.
+    FreeLibraryAndExitThread(hSelf, 0);
+    return 0;   // not reached
+}
+
+static void startUpdateCheckOnce()
+{
+    // Single atomic claim: only one thread can move Idle -> Running, so a
+    // panel reopened while a check is in flight (or racing its completion)
+    // can never spawn a duplicate worker.
+    int expected = kIdle;
+    if (!g_update.state.compare_exchange_strong(expected, kRunning,
+                                                std::memory_order_acq_rel))
+        return;   // already running, or completed for this DLL load
+
+    // Pin the DLL so it cannot be unloaded while the worker runs.
+    HMODULE hSelf = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                            reinterpret_cast<LPCWSTR>(&startUpdateCheckOnce),
+                            &hSelf))
+    {
+        g_update.state.store(kIdle, std::memory_order_release);
+        return;
+    }
+
+    HANDLE hThread = CreateThread(nullptr, 0, updateCheckThreadProc,
+                                  hSelf, 0, nullptr);
+    if (!hThread)
+    {
+        FreeLibrary(hSelf);
+        g_update.state.store(kIdle, std::memory_order_release);
+        return;
+    }
+    CloseHandle(hThread);
 }
 
 // ============================================================================
@@ -388,6 +505,19 @@ void ControlPanel::refreshStatus()
         swprintf_s(buf, L"%.1f ms", m_outputLatMs->load());
         SetDlgItemTextW(hTab, IDC_STATUS_LATENCY_OUT, buf);
     }
+
+    // Update-check result — polled here (not posted from the worker) so a
+    // panel opened at any point after the check finishes still shows it.
+    if (!m_updateShown && g_update.available.load(std::memory_order_acquire))
+    {
+        m_updateShown = true;
+        wchar_t buf[64];
+        swprintf_s(buf, L"Update available: %s", g_update.version);
+        SetDlgItemTextW(hTab, IDC_STATUS_UPDATE, buf);
+        swprintf_s(buf, L"Download %s", g_update.version);
+        SetDlgItemTextW(hTab, IDC_STATUS_UPDATE_BTN, buf);
+        ShowWindow(GetDlgItem(hTab, IDC_STATUS_UPDATE_BTN), SW_SHOW);
+    }
 }
 
 void ControlPanel::refreshInputTab()
@@ -468,7 +598,22 @@ void ControlPanel::refreshInputTab()
                 if (m_calibSecondsRemaining > 0)
                     --m_calibSecondsRemaining;
             }
-            if (m_settings)
+
+            // The window only advances while audio is actually flowing.  If
+            // the countdown has expired and the window still hasn't finished
+            // (~3 s grace), the stream isn't running — bail out instead of
+            // showing "0 seconds remaining" forever.
+            if (m_calibSecondsRemaining == 0 && ++m_calibOvertimeTicks > 30)
+            {
+                if (m_gain) m_gain->cancelCalibration();
+                m_calibActive = false;
+                m_calibOvertimeTicks = 0;
+                SetDlgItemTextW(hTab, IDC_AUTOSET_STATUS,
+                    L"Calibration timed out — is audio running? Try again.");
+                EnableWindow(GetDlgItem(hTab, IDC_AUTOSET_BTN), TRUE);
+                SendDlgItemMessageW(hTab, IDC_AUTOSET_PROGRESS, PBM_SETPOS, 0, 0);
+            }
+            else if (m_settings)
             {
                 int total = static_cast<int>(m_settings->calibrationDuration);
                 int elapsed = total - m_calibSecondsRemaining;
@@ -524,16 +669,11 @@ INT_PTR CALLBACK ControlPanel::MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, L
         // Start refresh timer (100 ms) — fires WM_TIMER in the modal loop
         pThis->m_timerID = SetTimer(hDlg, 1, 100, nullptr);
 
-        // Launch background update check (once per DLL load)
-        if (!g_update.checked.load() && !g_update.checking.load())
-        {
-            g_update.checking.store(true);
-            std::thread(updateCheckProc, hDlg).detach();
-        }
-        else if (g_update.available.load())
-        {
-            PostMessageW(hDlg, WM_UPDATE_AVAILABLE, 0, 0);
-        }
+        // Kick off the background update check (at most once per DLL load;
+        // failures are retried on the next panel open).  The result is
+        // picked up by the timer poll in refreshStatus().
+        pThis->m_updateShown = false;
+        startUpdateCheckOnce();
 
         return TRUE;
     }
@@ -560,24 +700,6 @@ INT_PTR CALLBACK ControlPanel::MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, L
         return TRUE;
     }
 
-    case WM_UPDATE_AVAILABLE:
-    {
-        // Show notification on the Device Status tab
-        HWND hStatus = pThis->m_hTabs[0];
-        if (hStatus && IsWindow(hStatus))
-        {
-            wchar_t buf[64];
-            swprintf_s(buf, L"Update available: %s", g_update.version);
-            SetDlgItemTextW(hStatus, IDC_STATUS_UPDATE, buf);
-
-            wchar_t btnText[64];
-            swprintf_s(btnText, L"Download %s", g_update.version);
-            SetDlgItemTextW(hStatus, IDC_STATUS_UPDATE_BTN, btnText);
-            ShowWindow(GetDlgItem(hStatus, IDC_STATUS_UPDATE_BTN), SW_SHOW);
-        }
-        return TRUE;
-    }
-
     case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
@@ -589,6 +711,13 @@ INT_PTR CALLBACK ControlPanel::MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, L
         return reinterpret_cast<INT_PTR>(g_hBrBg);
 
     case WM_CLOSE:
+        // Abandon any in-flight calibration so a stale window can never be
+        // applied (and persisted) on a later panel open.
+        if (pThis->m_calibActive)
+        {
+            if (pThis->m_gain) pThis->m_gain->cancelCalibration();
+            pThis->m_calibActive = false;
+        }
         KillTimer(hDlg, pThis->m_timerID);
         for (int i = 0; i < 4; ++i)
         {
@@ -701,6 +830,7 @@ INT_PTR CALLBACK ControlPanel::TabInputProc(HWND hDlg, UINT msg, WPARAM wParam, 
                 pThis->m_calibActive = true;
                 pThis->m_calibSecondsRemaining = static_cast<int>(duration);
                 pThis->m_calibTickCount = 0;
+                pThis->m_calibOvertimeTicks = 0;
                 EnableWindow(GetDlgItem(hDlg, IDC_AUTOSET_BTN), FALSE);
                 SetDlgItemTextW(hDlg, IDC_AUTOSET_STATUS, L"PLAY YOUR LOUDEST NOW! Strum hard for the full duration.");
             }
@@ -889,18 +1019,19 @@ INT_PTR CALLBACK ControlPanel::TabAdvancedProc(HWND hDlg, UINT msg, WPARAM wPara
         pThis = reinterpret_cast<ControlPanel*>(lParam);
         SetWindowLongPtrW(hDlg, DWLP_USER, reinterpret_cast<LONG_PTR>(pThis));
 
-        // Buffer size dropdown
+        // Buffer size dropdown — 64 is the driver minimum (matches
+        // getBufferSize's advertised range; smaller values are rejected).
         static const wchar_t* bufSizes[] = {
-            L"32 samples", L"64 samples", L"128 samples",
-            L"256 samples", L"512 samples", L"1024 samples", L"2048 samples"
+            L"64 samples", L"128 samples", L"256 samples",
+            L"512 samples", L"1024 samples", L"2048 samples"
         };
-        static const int bufVals[] = { 32, 64, 128, 256, 512, 1024, 2048 };
+        static const int bufVals[] = { 64, 128, 256, 512, 1024, 2048 };
         for (auto* s : bufSizes)
             SendDlgItemMessageW(hDlg, IDC_ADV_BUFSIZE, CB_ADDSTRING, 0, (LPARAM)s);
 
         uint32_t curBuf = pThis->m_settings ? pThis->m_settings->bufferSize : 128;
-        int selBuf = 2; // default 128
-        for (int i = 0; i < 7; ++i) if (bufVals[i] == (int)curBuf) { selBuf = i; break; }
+        int selBuf = 1; // default 128
+        for (int i = 0; i < 6; ++i) if (bufVals[i] == (int)curBuf) { selBuf = i; break; }
         SendDlgItemMessageW(hDlg, IDC_ADV_BUFSIZE, CB_SETCURSEL, selBuf, 0);
 
         // Sample rate dropdown
@@ -966,9 +1097,9 @@ INT_PTR CALLBACK ControlPanel::TabAdvancedProc(HWND hDlg, UINT msg, WPARAM wPara
             // Persist changes
             if (pThis->m_settings)
             {
-                static const int bufVals[] = { 32, 64, 128, 256, 512, 1024, 2048 };
+                static const int bufVals[] = { 64, 128, 256, 512, 1024, 2048 };
                 int selBuf = (int)SendDlgItemMessageW(hDlg, IDC_ADV_BUFSIZE, CB_GETCURSEL, 0, 0);
-                if (selBuf >= 0 && selBuf < 7) pThis->m_settings->bufferSize = bufVals[selBuf];
+                if (selBuf >= 0 && selBuf < 6) pThis->m_settings->bufferSize = bufVals[selBuf];
 
                 int selSR = (int)SendDlgItemMessageW(hDlg, IDC_ADV_SAMPLERATE, CB_GETCURSEL, 0, 0);
                 pThis->m_settings->sampleRate = (selSR == 1) ? 48000 : 44100;
@@ -1020,7 +1151,8 @@ INT_PTR CALLBACK ControlPanel::TabStatusProc(HWND hDlg, UINT msg, WPARAM wParam,
         SetDlgItemTextW(hDlg, IDC_STATUS_VERSION,
                          L"Orange OMEC Teleport ASIO Driver v" OMEC_VERSION_TAG_W);
 
-        // Hide update button until the background check finds a newer release
+        // Belt and braces: the dialog template also marks this control
+        // NOT WS_VISIBLE; refreshStatus() shows it when an update is found.
         ShowWindow(GetDlgItem(hDlg, IDC_STATUS_UPDATE_BTN), SW_HIDE);
 
         // Load and display the ASIO Compatible logo
@@ -1036,13 +1168,15 @@ INT_PTR CALLBACK ControlPanel::TabStatusProc(HWND hDlg, UINT msg, WPARAM wParam,
     switch (msg)
     {
     case WM_COMMAND:
-        if (LOWORD(wParam) == IDC_STATUS_UPDATE_BTN)
+        if (LOWORD(wParam) == IDC_STATUS_UPDATE_BTN && HIWORD(wParam) == BN_CLICKED)
         {
-            if (g_update.url[0])
+            // url is only ever a validated https://github.com/.../releases/ link
+            if (g_update.available.load(std::memory_order_acquire) && g_update.url[0])
                 ShellExecuteW(nullptr, L"open", g_update.url,
                               nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
         }
-        return TRUE;
+        return FALSE;   // don't claim notifications we don't handle
 
     case WM_CTLCOLORSTATIC:
     {

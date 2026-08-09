@@ -76,7 +76,7 @@ bool RegistrySettings::load(DriverSettings& out)
     if (out.outputVolumeDB < -60.0f) out.outputVolumeDB = -60.0f;
     if (out.outputVolumeDB >   0.0f) out.outputVolumeDB =   0.0f;
     if (out.sampleRate != 44100 && out.sampleRate != 48000) out.sampleRate = 44100;
-    if (out.bufferSize < 32 || out.bufferSize > 2048) out.bufferSize = 128;
+    if (out.bufferSize < 64 || out.bufferSize > 2048) out.bufferSize = 128;
     if (out.targetPeakDBFS < -18.0f) out.targetPeakDBFS = -18.0f;
     if (out.targetPeakDBFS >  -6.0f) out.targetPeakDBFS =  -6.0f;
     if (out.calibrationDuration < 3.0f)  out.calibrationDuration = 3.0f;

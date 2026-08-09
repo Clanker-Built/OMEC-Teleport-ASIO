@@ -79,7 +79,9 @@ private:
     bool                 m_calibActive   = false;
     int                  m_calibSecondsRemaining = 0;
     int                  m_calibTickCount = 0;
+    int                  m_calibOvertimeTicks = 0;  // ticks past window end
     UINT_PTR             m_timerID       = 0;
+    bool                 m_updateShown   = false;  // update notice shown this open
     float                m_calibTargetDB = -12.0f;
 
     // Peak hold for meters (UI thread only)

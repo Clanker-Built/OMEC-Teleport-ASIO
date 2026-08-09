@@ -57,12 +57,17 @@ void GainProcessor::processOutput(float* buf, int numFrames) noexcept
 
     for (int i = 0; i < numFrames; ++i)
     {
+        // Scrub NaN/Inf from the host's plugin chain unconditionally —
+        // this stage always runs, so bad samples never reach the shared
+        // Windows audio engine even with the soft limiter disabled.
         float sl = buf[i * 2 + 0] * gain;
+        if (!std::isfinite(sl)) sl = 0.0f;
         buf[i * 2 + 0] = sl;
         float absL = std::abs(sl);
         if (absL > peakL) peakL = absL;
 
         float sr = buf[i * 2 + 1] * gain;
+        if (!std::isfinite(sr)) sr = 0.0f;
         buf[i * 2 + 1] = sr;
         float absR = std::abs(sr);
         if (absR > peakR) peakR = absR;
@@ -79,18 +84,26 @@ void GainProcessor::applySoftLimiter(float* buf, int numFrames) noexcept
     if (!m_softLimiter.load(std::memory_order_relaxed))
         return;
 
-    // Threshold at -1 dBFS = 10^(-1/20) ~ 0.891
-    static constexpr float threshold = 0.891f;
-    static constexpr float invThresh = 1.0f / threshold;
+    // Continuous soft knee engaging at -1 dBFS.  Below T the signal passes
+    // untouched; above T it is mapped into [T, 1.0) with
+    //     y = T + (1-T) * tanh((|s| - T) / (1-T))
+    // which is C1-continuous at the threshold (value T, slope 1) and
+    // asymptotes at full scale — no waveform step at the crossing, unlike
+    // the previous piecewise form which jumped by ~-2.4 dB at |s| = T.
+    static constexpr float T        = 0.891f;          // 10^(-1/20)
+    static constexpr float range    = 1.0f - T;
+    static constexpr float invRange = 1.0f / range;
 
     for (int i = 0; i < numFrames * 2; ++i)
     {
         float s = buf[i];
-        if (s > threshold)
-            s = threshold * std::tanh(s * invThresh);
-        else if (s < -threshold)
-            s = -threshold * std::tanh(-s * invThresh);
-        buf[i] = s;
+        if (!std::isfinite(s)) { buf[i] = 0.0f; continue; }  // scrub NaN/Inf
+        const float a = std::abs(s);
+        if (a > T)
+        {
+            const float y = T + range * std::tanh((a - T) * invRange);
+            buf[i] = (s < 0.0f) ? -y : y;
+        }
     }
 }
 
@@ -139,17 +152,22 @@ void GainProcessor::decayPeaks(float decayFactor) noexcept
 }
 
 // ---- Calibration ------------------------------------------------------------
+//
+// Lock-free redesign: the audio thread feeds the (incremental) true-peak
+// detector directly — no mutex, no sample buffer, no allocation on the
+// Pro Audio thread.  The detector and frame counters are owned exclusively
+// by the audio thread; the UI thread only sees the atomic result, published
+// with release/acquire ordering via m_calibFinished.
 
 void GainProcessor::beginCalibration(float targetPeakDBFS, float durationSeconds) noexcept
 {
-    std::lock_guard<std::mutex> lock(m_calibMutex);
-    m_targetPeakDBFS  = std::clamp(targetPeakDBFS, -18.0f, -6.0f);
-    m_calibDuration   = std::clamp(durationSeconds, 3.0f, 15.0f);
-    m_calibElapsed    = 0.0f;
-    m_calibSamples.clear();
-    m_calibSamples.reserve(static_cast<size_t>(m_calibDuration * 44100 * 2 * 1.1f));
-    m_peakDetector.reset();
-    m_calibFinished   = false;
+    m_targetPeakDBFS = std::clamp(targetPeakDBFS, -18.0f, -6.0f);
+    m_calibDurationSec.store(std::clamp(durationSeconds, 3.0f, 15.0f),
+                             std::memory_order_relaxed);
+    m_calibFinished.store(false, std::memory_order_relaxed);
+    // The audio thread resets its detector state when it sees the pending
+    // flag — the UI thread never touches audio-owned state.
+    m_calibPending.store(true, std::memory_order_relaxed);
     m_calibrating.store(true, std::memory_order_release);
 }
 
@@ -159,23 +177,25 @@ bool GainProcessor::feedCalibration(const float* stereoSamples, int numFrames,
     if (!m_calibrating.load(std::memory_order_acquire))
         return false;
 
-    std::lock_guard<std::mutex> lock(m_calibMutex);
-    if (!m_calibrating.load(std::memory_order_relaxed))
-        return false;
-
-    m_calibSampleRate = sampleRate;
-
-    // Append raw samples before gain is applied (call this BEFORE processInput)
-    m_calibSamples.insert(m_calibSamples.end(),
-                          stereoSamples,
-                          stereoSamples + numFrames * 2);
-
-    m_calibElapsed += static_cast<float>(numFrames) / static_cast<float>(sampleRate);
-
-    if (m_calibElapsed >= m_calibDuration)
+    if (m_calibPending.exchange(false, std::memory_order_acq_rel))
     {
+        m_peakDetector.reset();
+        m_calibFramesFed = 0;
+        const float dur = m_calibDurationSec.load(std::memory_order_relaxed);
+        m_calibFramesTarget = static_cast<uint64_t>(
+            dur * static_cast<float>(sampleRate > 0 ? sampleRate : 48000));
+    }
+
+    // Incremental 4x-oversampled true peak — bounded math per sample,
+    // no locks, no allocation.
+    m_peakDetector.feedStereoFloat(stereoSamples, static_cast<size_t>(numFrames));
+    m_calibFramesFed += static_cast<uint64_t>(numFrames);
+
+    if (m_calibFramesFed >= m_calibFramesTarget)
+    {
+        m_calibPeak.store(m_peakDetector.truePeakLinear(), std::memory_order_relaxed);
+        m_calibFinished.store(true, std::memory_order_release);
         m_calibrating.store(false, std::memory_order_release);
-        m_calibFinished = true;
         return false;   // signal "done" to caller
     }
     return true;
@@ -184,41 +204,30 @@ bool GainProcessor::feedCalibration(const float* stereoSamples, int numFrames,
 void GainProcessor::cancelCalibration() noexcept
 {
     m_calibrating.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> lock(m_calibMutex);
-    m_calibSamples.clear();
-    m_calibFinished = false;
+    m_calibFinished.store(false, std::memory_order_release);
 }
 
 CalibrationResult GainProcessor::finishCalibration() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_calibMutex);
-
     CalibrationResult res;
     res.targetPeakDB = m_targetPeakDBFS;
 
-    if (!m_calibFinished || m_calibSamples.empty())
+    if (!m_calibFinished.exchange(false, std::memory_order_acq_rel))
     {
         res.success = false;
         return res;
     }
 
-    // Compute true peak over all accumulated samples
-    m_peakDetector.reset();
-    m_peakDetector.feedStereoFloat(m_calibSamples.data(),
-                                    m_calibSamples.size() / 2);
-
-    const float peak = m_peakDetector.truePeakLinear();
+    const float peak = m_calibPeak.load(std::memory_order_relaxed);
     if (peak < 0.001f)
     {
         // No signal detected
         res.success = false;
-        m_calibSamples.clear();
-        m_calibFinished = false;
         return res;
     }
 
-    const float peakDB      = m_peakDetector.truePeakDBFS();
-    const float requiredDB  = std::clamp(m_targetPeakDBFS - peakDB, -60.0f, 12.0f);
+    const float peakDB     = 20.0f * std::log10(peak);
+    const float requiredDB = std::clamp(m_targetPeakDBFS - peakDB, -60.0f, 12.0f);
 
     res.success        = true;
     res.measuredPeakDB = peakDB;
@@ -226,10 +235,6 @@ CalibrationResult GainProcessor::finishCalibration() noexcept
 
     // Apply the new gain immediately (both channels)
     setInputGainDB(requiredDB);
-
-    m_calibResult   = res;
-    m_calibSamples.clear();
-    m_calibFinished = false;
 
     return res;
 }

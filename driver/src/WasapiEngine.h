@@ -16,7 +16,13 @@ class GainProcessor;
 using AsioProcessFunc = void(*)(void* ctx, const float* input,
                                  float* output, uint32_t frames);
 
+// Called (from the audio thread) when the stream dies unrecoverably —
+// device removal, engine fault.  The owner should ask the host to reset.
+using EngineResetFunc = void(*)(void* ctx);
+
 // Lock-free SPSC ring buffer for interleaved float stereo samples.
+// NOTE: in this engine both producer and consumer are the audio thread,
+// so discard() (reader-side skip) is safe from that thread.
 class StereoRing
 {
 public:
@@ -43,6 +49,13 @@ public:
         m_rd.store(rd + count, std::memory_order_release);
     }
 
+    // Skip 'count' samples without copying (drop oldest data).
+    void discard(uint32_t count)
+    {
+        uint32_t rd = m_rd.load(std::memory_order_relaxed);
+        m_rd.store(rd + count, std::memory_order_release);
+    }
+
     void clear() { m_wr.store(0); m_rd.store(0); }
 
 private:
@@ -54,7 +67,7 @@ private:
 class WasapiEngine
 {
 public:
-    static constexpr size_t MAX_BUF = 2048;
+    static constexpr uint32_t MAX_BUF = 2048;
 
     WasapiEngine();
     ~WasapiEngine();
@@ -67,7 +80,19 @@ public:
     bool     isOpen()            const { return m_open.load(); }
     uint32_t actualFrames()      const { return m_asioBufSize; }
     uint32_t minDeviceFrames()   const { return 64; }
+
+    // The rate the stream is actually running at.  With AUTOCONVERTPCM this
+    // equals the host's requested ASIO rate; on the fallback path it is the
+    // endpoint mix rate (the owner is told and must inform the host).
     uint32_t deviceSampleRate()  const { return m_deviceSampleRate; }
+
+    // Honest steady-state latency (frames at deviceSampleRate), valid after
+    // start(): includes the WASAPI engine buffers and ring residency, not
+    // just the ASIO double-buffer.
+    uint32_t inputLatencyFrames()  const { return m_inLatencyFrames.load(std::memory_order_acquire); }
+    uint32_t outputLatencyFrames() const { return m_outLatencyFrames.load(std::memory_order_acquire); }
+
+    bool     hadFatalError()     const { return m_fatalError.load(std::memory_order_acquire); }
 
     void setGainProcessor(GainProcessor* gp) { m_gain = gp; }
     void setBufferSize(uint32_t) {}
@@ -79,12 +104,22 @@ public:
         m_asioBufSize = asioBufferSize;
     }
 
+    void setResetRequestCallback(EngineResetFunc func, void* ctx)
+    {
+        m_resetFunc = func;
+        m_resetCtx  = ctx;
+    }
+
     size_t inPipelineSamples()  const { return m_asioBufSize; }
     size_t outPipelineSamples() const { return m_asioBufSize; }
 
 private:
     void audioThreadProc();
     bool findEndpoints(IMMDevice** ppCap, IMMDevice** ppRen);
+    void releaseStreamObjects();
+    void fatalStreamError(const char* msg);
+    void writeCapturePacket(const BYTE* data, uint32_t frames, DWORD flags);
+    void writeOutputBuffer(float* renBuf);
 
     // WASAPI objects
     IMMDeviceEnumerator* m_enum   = nullptr;
@@ -101,11 +136,16 @@ private:
     std::thread       m_thread;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_open   {false};
+    std::atomic<bool> m_fatalError{false};
 
     uint32_t m_deviceSampleRate = 48000;
     uint32_t m_asioBufSize      = 128;
     uint32_t m_capBufFrames     = 0;
     uint32_t m_renBufFrames     = 0;
+
+    // Output-ring steady-state target (frames); backlog above this is
+    // gradually removed by micro time-compression (see writeOutputBuffer).
+    uint32_t m_outTargetFrames  = 0;
 
     // Mix format info
     WORD m_capBps      = 32;
@@ -124,9 +164,17 @@ private:
 
     AsioProcessFunc m_asioFunc = nullptr;
     void*           m_asioCtx  = nullptr;
+    EngineResetFunc m_resetFunc = nullptr;
+    void*           m_resetCtx  = nullptr;
 
     GainProcessor* m_gain = nullptr;
 
-    // Drift diagnostics
-    uint32_t m_driftTrimCount = 0;
+    // Latency reporting (frames at m_deviceSampleRate)
+    std::atomic<uint32_t> m_inLatencyFrames{0};
+    std::atomic<uint32_t> m_outLatencyFrames{0};
+
+    // Diagnostics (readable via debugger / future UI)
+    std::atomic<uint32_t> m_capOverflowCount{0};   // capture ring overflowed, oldest dropped
+    std::atomic<uint32_t> m_outTrimCount{0};       // micro time-compression events
+    std::atomic<uint32_t> m_outHardTrimCount{0};   // emergency output-ring drops
 };

@@ -12,8 +12,10 @@ set SCRIPT_DIR=%~dp0
 set DLL_PATH=%SCRIPT_DIR%..\x64\Release\OmecTeleportASIO.dll
 if not exist "%DLL_PATH%" set DLL_PATH=%SCRIPT_DIR%..\x64\Debug\OmecTeleportASIO.dll
 
+:: No hardcoded version here — the DLL's file properties and the control
+:: panel About text are the single source of version truth (resource.h).
 echo ==========================================================
-echo  Orange OMEC Teleport ASIO Driver Installer  v1.0
+echo  Orange OMEC Teleport ASIO Driver Installer
 echo ==========================================================
 echo.
 

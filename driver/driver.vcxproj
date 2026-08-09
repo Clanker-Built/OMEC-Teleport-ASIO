@@ -73,9 +73,12 @@
       <AdditionalDependencies>
         ole32.lib;oleaut32.lib;avrt.lib;propsys.lib;
         advapi32.lib;user32.lib;gdi32.lib;comctl32.lib;
-        uxtheme.lib;uuid.lib;
+        uxtheme.lib;uuid.lib;delayimp.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
+      <!-- winhttp is used only by the update check; delay-load it so every
+           DAW's ASIO driver scan doesn't pay for mapping an HTTP stack -->
+      <DelayLoadDLLs>winhttp.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
       <SubSystem>Windows</SubSystem>
     </Link>
     <ResourceCompile>

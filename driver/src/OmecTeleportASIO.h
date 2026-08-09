@@ -73,6 +73,10 @@ private:
     static void asioCallback(void* ctx, const float* input,
                              float* output, uint32_t frames);
 
+    // Called from the audio thread when the stream dies unrecoverably
+    // (device removal, engine fault) — asks the host to reset the driver.
+    static void engineResetRequest(void* ctx);
+
     // Subsystems
     std::unique_ptr<WasapiEngine>    m_usb;
     std::unique_ptr<GainProcessor>   m_gain;

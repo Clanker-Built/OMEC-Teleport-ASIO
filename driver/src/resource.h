@@ -67,15 +67,23 @@
 #define IDB_ASIO_LOGO         280
 
 // ==========================================================================
-// VERSION — change ONLY these defines for each release.
-// Everything else (VERSIONINFO, About text, update check) reads from here.
+// VERSION — bump ONLY the three numeric fields for each release.
+// All string forms below are derived by the preprocessor, so they cannot
+// drift from the numbers (VERSIONINFO, About text, update check, user
+// agent, and getDriverVersion all read from here).
 // ==========================================================================
 #define OMEC_VERSION_MAJOR    1
-#define OMEC_VERSION_MINOR    5
+#define OMEC_VERSION_MINOR    6
 #define OMEC_VERSION_PATCH    0
-#define OMEC_VERSION_TAG      "1.5"
-#define OMEC_VERSION_TAG_W    L"1.5"
-#define OMEC_VERSION_FILE_STR "1.5.0.0"
+
+#define OMEC_STRINGIZE2(x)    #x
+#define OMEC_STRINGIZE(x)     OMEC_STRINGIZE2(x)
+#define OMEC_WIDEN2(x)        L ## x
+#define OMEC_WIDEN(x)         OMEC_WIDEN2(x)
+
+#define OMEC_VERSION_TAG      OMEC_STRINGIZE(OMEC_VERSION_MAJOR.OMEC_VERSION_MINOR.OMEC_VERSION_PATCH)
+#define OMEC_VERSION_TAG_W    OMEC_WIDEN(OMEC_VERSION_TAG)
+#define OMEC_VERSION_FILE_STR OMEC_STRINGIZE(OMEC_VERSION_MAJOR.OMEC_VERSION_MINOR.OMEC_VERSION_PATCH.0)
 
 // Version info string table
 #define IDS_DRIVER_NAME       301

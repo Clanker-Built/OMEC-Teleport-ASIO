@@ -19,11 +19,9 @@
 //-----------------------------------------------------------------------------
 
 #include <atomic>
-#include <mutex>
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
-#include <vector>
 
 #include "TruePeakDetector.h"
 
@@ -126,15 +124,18 @@ private:
     // Soft limiter
     std::atomic<bool>  m_softLimiter;
 
-    // Calibration state
-    std::atomic<bool>  m_calibrating;
-    float              m_targetPeakDBFS   = -12.0f;
-    float              m_calibDuration    = 8.0f;
-    float              m_calibElapsed     = 0.0f;   // in samples / (sr * 2 channels)
-    uint32_t           m_calibSampleRate  = 44100;
-    std::mutex         m_calibMutex;
-    std::vector<float> m_calibSamples;               // accumulates stereo float pairs
-    TruePeakDetector   m_peakDetector;
-    bool               m_calibFinished    = false;
-    CalibrationResult  m_calibResult;
+    // Calibration state — lock-free.
+    // UI thread: begin/cancel/finish.  Audio thread: feedCalibration.
+    // m_peakDetector / m_calibFramesFed / m_calibFramesTarget are owned by
+    // the audio thread (reset via m_calibPending); the result crosses back
+    // through m_calibPeak, published by the release-store of m_calibFinished.
+    std::atomic<bool>   m_calibrating;
+    std::atomic<bool>   m_calibPending  {false};
+    std::atomic<bool>   m_calibFinished {false};
+    std::atomic<float>  m_calibPeak     {0.0f};
+    std::atomic<float>  m_calibDurationSec {8.0f};
+    float               m_targetPeakDBFS = -12.0f;   // UI thread only
+    TruePeakDetector    m_peakDetector;              // audio thread only
+    uint64_t            m_calibFramesFed    = 0;     // audio thread only
+    uint64_t            m_calibFramesTarget = 0;     // audio thread only
 };
